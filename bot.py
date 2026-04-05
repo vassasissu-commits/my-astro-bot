@@ -27,6 +27,10 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# 🖼️ КАРТИНКА ДЛЯ ПРИВЕТСТВИЯ (Мистическая тема)
+# Можешь заменить эту ссылку на любую другую, если найдёшь лучше
+WELCOME_IMAGE_URL = "https://images.unsplash.com/photo-1532968961962-8077c8e26366?q=80&w=1000&auto=format&fit=crop"
+
 # 🗄️ БАЗА ДАННЫХ
 DB_PATH = "astro.db"
 
@@ -92,7 +96,7 @@ STOICHIOMETRY = {
     "♐ Стрелец": "fire", "♑ Козерог": "earth", "♒ Водолей": "air", "♓ Рыбы": "water"
 }
 
-# 💕 РАСШИРЕННАЯ БАЗА СОВМЕСТИМОСТИ (50+ уникальных комбинаций на пару)
+# 💕 РАСШИРЕННАЯ БАЗА СОВМЕСТИМОСТИ
 COMPAT_VIBES = {
     ("fire", "fire"): {"vibe": "🔥🔥 Огненный союз: страсть, драйв и вечный двигатель!",
                        "plus": "Вы понимаете друг друга без слов, поддерживаете амбиции и не боитесь риска.",
@@ -186,7 +190,7 @@ ORACLE_ANSWERS = [
     "🌑 Затмение скоро пройдёт", "🌟 Созвездие удачи выстроилось"
 ]
 
-# 🌙 РАСШИРЕННЫЕ АСТРО-СОВЕТЫ (30+ вариантов)
+# 🌙 РАСШИРЕННЫЕ АСТРО-СОВЕТЫ
 ASTRO_TIPS = [
     "🌿 Луна в знаке Земли: время для планирования бюджета, уборки и наведения порядка в документах.",
     "⚡ Меркурий активен: не отправляй важные сообщения после 22:00, лучше отложи до утра.",
@@ -232,8 +236,7 @@ def get_moon_phase():
     elif phase < 23.99361: return "🌘 Последняя четверть", int((phase-20.30228)/1.84563)+23, "🧹 Очистка, завершение дел, прощение, подготовка к новому циклу."
     else: return "🌒 Убывающий серп", int((phase-23.99361)/1.84563)+24, "🌌 Тишина, отдых, подведение итогов, сбор энергии перед новолунием."
 
-def get_astro_tip():
-    return random.choice(ASTRO_TIPS)
+def get_astro_tip(): return random.choice(ASTRO_TIPS)
 
 def get_horoscope_reliable(sign):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -299,11 +302,37 @@ SIGN_MAP = {
 }
 
 # 🎯 ОБРАБОТЧИКИ
+
 @dp.message(Command("start"))
-@dp.message(F.text == "🏠 Главное меню")
 async def cmd_start(message: types.Message):
     await add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    await message.answer(f"🌟 Привет, {message.from_user.first_name}!\nЯ твой астрологический компас.\nБесплатно: гороскопы, луна, совместимость.\n💎 Premium: натальные карты, транзиты, прогнозы.\nВыбери действие:", reply_markup=main_kb())
+    caption = (
+        f"Привет, {message.from_user.first_name}! ✨\n\n"
+        "Я — проводник между мирами видимого и скрытого.\n"
+        "Здесь ты узнаешь, что готовят планеты,\n"
+        "услышишь совет Луны и раскроешь карты судьбы.\n\n"
+        "🔮 **Бесплатно:**\n"
+        "• Гороскоп на день\n"
+        "• Фаза Луны и советы\n"
+        "• Совместимость по стихиям\n"
+        "• Магический шар ответов\n\n"
+        "💎 **Открой больше в Premium:**\n"
+        "• Натальная карта рождения\n"
+        "• Прогноз транзитов планет\n"
+        "• Персональные рекомендации\n\n"
+        "✨ Выбери путь:"
+    )
+    await message.answer_photo(
+        photo=WELCOME_IMAGE_URL,
+        caption=caption,
+        reply_markup=main_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(F.text == "🏠 Главное меню")
+async def cmd_home(message: types.Message):
+    # Повторяем логику /start, но без добавления юзера в БД (он уже там)
+    await cmd_start(message)
 
 @dp.message(Command("profile"))
 @dp.message(F.text == "📊 Мой профиль")
@@ -328,7 +357,18 @@ async def show_horoscope(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_main")
 async def back_to_main(cb: types.CallbackQuery):
-    await cb.message.edit_text(f"🌟 Главное меню\nВыбери действие:", reply_markup=main_kb())
+    # Отправляем фото вместо редактирования текста для сохранения стиля
+    caption = (
+        "✨ Главное меню\n\n"
+        "Я — проводник между мирами видимого и скрытого.\n"
+        "✨ Выбери действие:"
+    )
+    await cb.message.answer_photo(
+        photo=WELCOME_IMAGE_URL,
+        caption=caption,
+        reply_markup=main_kb(),
+        parse_mode="Markdown"
+    )
     await cb.answer()
 
 @dp.message(F.text == "🌙 Луна")
@@ -367,7 +407,7 @@ async def calc_compat(message: types.Message):
     my_el = STOICHIOMETRY[user["zodiac_sign"]]
     their_el = STOICHIOMETRY[found_sign]
     data = COMPAT_VIBES.get((my_el, their_el), COMPAT_VIBES.get((their_el, my_el)))
-    if not data: data = COMPAT_VIBES[("earth", "air")] # fallback
+    if not data: data = COMPAT_VIBES[("earth", "air")]
 
     name_part = text[:text.lower().index(found_key)].strip().rstrip(" -:")
     name = name_part.capitalize() if name_part else "Партнёр"
