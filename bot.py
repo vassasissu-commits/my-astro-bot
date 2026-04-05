@@ -30,7 +30,7 @@ dp = Dispatcher()
 # 🖼️ КАРТИНКА ДЛЯ ПРИВЕТСТВИЯ
 WELCOME_IMAGE_URL = "https://images.unsplash.com/photo-1532968961962-8077c8e26366?q=80&w=1000&auto=format&fit=crop"
 
-# 🗄️ БАЗА ДАННЫХ
+# 🗄️ БАЗА ДАННЫХ (ИСПРАВЛЕННАЯ)
 DB_PATH = "astro.db"
 
 def init_db():
@@ -54,14 +54,20 @@ async def add_user(tid, uname, fname):
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?,?,?)", (tid, uname, fname))
     conn.commit(); conn.close()
 
-async def update_user(tid, **kwargs):
-    if not kwargs: return
-    set_clause = ", ".join(f"{k}=?" for k in kwargs); vals = list(kwargs.values()) + [tid]
+# 🔑 НОВАЯ ФУНКЦИЯ: Гарантированное сохранение знака
+async def save_zodiac(tid, sign):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute(f"UPDATE users SET {set_clause} WHERE telegram_id=?", vals)
+    c.execute("UPDATE users SET zodiac_sign=? WHERE telegram_id=?", (sign, tid))
+    if c.rowcount == 0:  # Если строки нет, создаём её
+        c.execute("INSERT INTO users (telegram_id, zodiac_sign) VALUES (?, ?)", (tid, sign))
     conn.commit(); conn.close()
 
-async def set_premium(tid, status: bool): await update_user(tid, is_premium=1 if status else 0)
+async def set_premium(tid, status: bool):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("UPDATE users SET is_premium=? WHERE telegram_id=?", (1 if status else 0, tid))
+    if c.rowcount == 0:
+        c.execute("INSERT INTO users (telegram_id, is_premium) VALUES (?, ?)", (tid, 1 if status else 0))
+    conn.commit(); conn.close()
 
 # 🔒 ДЕКОРАТОР PREMIUM
 def premium_required(func):
@@ -330,8 +336,9 @@ async def cmd_home(message: types.Message):
 async def cmd_profile(message: types.Message):
     u = await get_user(message.from_user.id)
     if not u: return
-    prem = "💎 Да" if u["is_premium"] else "🆓 Нет"
-    await message.answer(f"👤 {u['first_name']}\n♐ Знак: {u['zodiac_sign'] or 'Не выбран'}\n📅 Дата: {u['birth_date'] or 'Не указана'}\n💎 Premium: {prem}",
+    prem = "💎 Да" if u.get("is_premium") else "🆓 Нет"
+    sign = u.get("zodiac_sign") or "Не выбран"
+    await message.answer(f"👤 {u['first_name']}\n♐ Знак: {sign}\n📅 Дата: {u['birth_date'] or 'Не указана'}\n💎 Premium: {prem}",
                          reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Главное меню")]], resize_keyboard=True))
 
 @dp.message(F.text == "🔮 Гороскоп")
@@ -342,7 +349,7 @@ async def horoscope_menu(message: types.Message):
 async def show_horoscope(cb: types.CallbackQuery):
     sign = cb.data.replace("sign_", "")
     text = get_horoscope_reliable(sign)
-    await update_user(cb.from_user.id, zodiac_sign=sign)
+    await save_zodiac(cb.from_user.id, sign)  # 🔑 ТЕПЕРЬ ГАРАНТИРОВАННО СОХРАНЯЕТ
     await cb.message.answer(f"{sign}\n\n{text}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]]))
     await cb.answer()
 
@@ -375,17 +382,21 @@ async def calc_compat(message: types.Message):
     for key, full_sign in SIGN_MAP.items():
         if re.search(r'\b' + re.escape(key) + r'\b', text_lower):
             found_sign, found_key = full_sign, key; break
-    if not found_sign: return
+    if not found_sign: return  # Пропускаем, если это не команда совместимости
+    
     user = await get_user(message.from_user.id)
-    if not user or not user.get("zodiac_sign"):
+    saved_sign = user.get("zodiac_sign", "").strip() if user else ""
+    if not saved_sign:
         return await message.answer("❓ Сначала узнай свой знак в разделе 🔮 Гороскоп!",
                                     reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Главное меню")]], resize_keyboard=True))
-    my_el, their_el = STOICHIOMETRY[user["zodiac_sign"]], STOICHIOMETRY[found_sign]
+    
+    my_el, their_el = STOICHIOMETRY[saved_sign], STOICHIOMETRY[found_sign]
     data = COMPAT_VIBES.get((my_el, their_el)) or COMPAT_VIBES.get((their_el, my_el)) or COMPAT_VIBES[("earth", "air")]
     name_part = text[:text.lower().index(found_key)].strip().rstrip(" -:")
     name = name_part.capitalize() if name_part else "Партнёр"
+    
     await message.answer(
-        f"💕 {user['first_name']} ({user['zodiac_sign']}) + {name} ({found_sign})\n\n"
+        f"💕 {user.get('first_name', 'Пользователь')} ({saved_sign}) + {name} ({found_sign})\n\n"
         f"**Общая вибрация:** {data['vibe']}\n**Сильная сторона:** {data['plus']}\n"
         f"**Зона риска:** {data['minus']}\n**Совет звёзд:** {data['advice']}\n\n"
         f"💡 *Упрощённый расчёт по стихиям. Для детального анализа по датам и времени нужен Premium.*",
@@ -420,7 +431,6 @@ async def natal_time(message: types.Message, state: FSMContext):
 @dp.message(ProfileState.place)
 async def natal_place(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    await update_user(message.from_user.id, birth_date=data["birth_date"], birth_time=data["birth_time"], birth_place=data["birth_place"])
     await message.answer(f"📊 **Натальная карта сгенерирована!**\n📅 {data['birth_date']} | 🕐 {data['birth_time']} | 🌍 {data['birth_place']}\n☀️ Полный отчёт в обработке...",
                          reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Главное меню")]], resize_keyboard=True))
     await state.clear()
