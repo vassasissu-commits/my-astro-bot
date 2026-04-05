@@ -28,7 +28,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # 🖼️ КАРТИНКА ДЛЯ ПРИВЕТСТВИЯ
-WELCOME_IMAGE_URL = "https://images.unsplash.com/photo-1532968961962-8077c8e26366?q=80&w=1000&auto=format&fit=crop"
+WELCOME_IMAGE_URL = "https://pixabay.com/images/download/maklay62-zodiac-4709196_1920.png"
 
 # 🗄️ БАЗА ДАННЫХ (ИСПРАВЛЕННАЯ)
 DB_PATH = "astro.db"
