@@ -28,7 +28,8 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # 🖼️ КАРТИНКА ДЛЯ ПРИВЕТСТВИЯ
-WELCOME_IMAGE_URL = "https://pixabay.com/images/download/maklay62-zodiac-4709196_1920.png"
+# Картинка будет загружаться из файла
+WELCOME_IMAGE_PATH = "welcome.jpg"
 
 # 🗄️ БАЗА ДАННЫХ (ИСПРАВЛЕННАЯ)
 DB_PATH = "astro.db"
