@@ -27,11 +27,10 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# 🖼️ КАРТИНКА ДЛЯ ПРИВЕТСТВИЯ
-# Картинка будет загружаться из файла
-WELCOME_IMAGE_PATH = "welcome.jpg"
+# 🖼️ НАДЁЖНАЯ КАРТИНКА (CDN Pixabay)
+WELCOME_IMAGE_URL = "https://cdn.pixabay.com/photo/2017/08/16/22/38/universe-2650272_1280.jpg"
 
-# 🗄️ БАЗА ДАННЫХ (ИСПРАВЛЕННАЯ)
+# 🗄️ БАЗА ДАННЫХ
 DB_PATH = "astro.db"
 
 def init_db():
@@ -50,24 +49,28 @@ async def get_user(tid):
     res = c.fetchone(); conn.close()
     return dict(res) if res else None
 
+def get_safe_name(user):
+    """Безопасное получение имени: first_name -> username -> fallback"""
+    return user.first_name or user.username or "Таинственный странник"
+
 async def add_user(tid, uname, fname):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, first_name) VALUES (?,?,?)", (tid, uname, fname))
     conn.commit(); conn.close()
 
-# 🔑 НОВАЯ ФУНКЦИЯ: Гарантированное сохранение знака
 async def save_zodiac(tid, sign):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
     c.execute("UPDATE users SET zodiac_sign=? WHERE telegram_id=?", (sign, tid))
-    if c.rowcount == 0:  # Если строки нет, создаём её
+    if c.rowcount == 0:
         c.execute("INSERT INTO users (telegram_id, zodiac_sign) VALUES (?, ?)", (tid, sign))
     conn.commit(); conn.close()
 
 async def set_premium(tid, status: bool):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("UPDATE users SET is_premium=? WHERE telegram_id=?", (1 if status else 0, tid))
+    val = 1 if status else 0
+    c.execute("UPDATE users SET is_premium=? WHERE telegram_id=?", (val, tid))
     if c.rowcount == 0:
-        c.execute("INSERT INTO users (telegram_id, is_premium) VALUES (?, ?)", (tid, 1 if status else 0))
+        c.execute("INSERT INTO users (telegram_id, is_premium) VALUES (?, ?)", (tid, val))
     conn.commit(); conn.close()
 
 # 🔒 ДЕКОРАТОР PREMIUM
@@ -290,9 +293,10 @@ SIGN_MAP = {
 # 🎯 ОБРАБОТЧИКИ
 
 def get_welcome_caption(name=None):
-    prefix = f"Привет, {name}! ✨\n\n" if name else ""
+    display_name = name or "✨"
     return (
-        f"{prefix}Я — проводник между мирами видимого и скрытого.\n"
+        f"Привет, {display_name}! ✨\n\n"
+        "Я — проводник между мирами видимого и скрытого.\n"
         "Здесь ты узнаешь, что готовят планеты,\n"
         "услышишь совет Луны и раскроешь карты судьбы.\n\n"
         "🔮 **Бесплатно:**\n"
@@ -307,9 +311,8 @@ def get_welcome_caption(name=None):
         "✨ Выбери путь:"
     )
 
-async def send_welcome(message, caption=None):
-    if caption is None:
-        caption = get_welcome_caption(message.from_user.first_name)
+async def send_welcome(message, name=None):
+    caption = get_welcome_caption(name)
     try:
         await message.answer_photo(
             photo=WELCOME_IMAGE_URL,
@@ -318,28 +321,31 @@ async def send_welcome(message, caption=None):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки фото: {e}")
+        logger.warning(f"⚠️ Картинка не загрузилась, отправляю текст: {e}")
         await message.answer(caption, reply_markup=main_kb(), parse_mode="Markdown")
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    await send_welcome(message)
-    logger.info(f"✅ /start от {message.from_user.id}")
+    safe_name = get_safe_name(message.from_user)
+    await add_user(message.from_user.id, message.from_user.username, safe_name)
+    await send_welcome(message, safe_name)
+    logger.info(f"✅ /start от {message.from_user.id} ({safe_name})")
 
 @dp.message(F.text == "🏠 Главное меню")
 async def cmd_home(message: types.Message):
-    logger.info(f"🏠 Кнопка 'Главное меню' от {message.from_user.id}")
-    await send_welcome(message, get_welcome_caption("✨"))
+    safe_name = get_safe_name(message.from_user)
+    logger.info(f"🏠 Кнопка 'Главное меню' от {message.from_user.id} ({safe_name})")
+    await send_welcome(message, safe_name)
 
 @dp.message(Command("profile"))
 @dp.message(F.text == "📊 Мой профиль")
 async def cmd_profile(message: types.Message):
     u = await get_user(message.from_user.id)
     if not u: return
+    display_name = u.get("first_name") or "Пользователь"
     prem = "💎 Да" if u.get("is_premium") else "🆓 Нет"
     sign = u.get("zodiac_sign") or "Не выбран"
-    await message.answer(f"👤 {u['first_name']}\n♐ Знак: {sign}\n📅 Дата: {u['birth_date'] or 'Не указана'}\n💎 Premium: {prem}",
+    await message.answer(f"👤 {display_name}\n♐ Знак: {sign}\n📅 Дата: {u['birth_date'] or 'Не указана'}\n💎 Premium: {prem}",
                          reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Главное меню")]], resize_keyboard=True))
 
 @dp.message(F.text == "🔮 Гороскоп")
@@ -350,13 +356,12 @@ async def horoscope_menu(message: types.Message):
 async def show_horoscope(cb: types.CallbackQuery):
     sign = cb.data.replace("sign_", "")
     text = get_horoscope_reliable(sign)
-    await save_zodiac(cb.from_user.id, sign)  # 🔑 ТЕПЕРЬ ГАРАНТИРОВАННО СОХРАНЯЕТ
+    await save_zodiac(cb.from_user.id, sign)
     await cb.message.answer(f"{sign}\n\n{text}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]]))
     await cb.answer()
 
 @dp.callback_query(F.data == "back_main")
 async def back_to_main(cb: types.CallbackQuery):
-    logger.info(f"🔙 Inline-кнопка 'Главное меню' от {cb.from_user.id}")
     await cb.message.answer(get_welcome_caption("✨"), reply_markup=main_kb(), parse_mode="Markdown")
     await cb.answer()
 
@@ -383,10 +388,12 @@ async def calc_compat(message: types.Message):
     for key, full_sign in SIGN_MAP.items():
         if re.search(r'\b' + re.escape(key) + r'\b', text_lower):
             found_sign, found_key = full_sign, key; break
-    if not found_sign: return  # Пропускаем, если это не команда совместимости
+    if not found_sign: return
     
     user = await get_user(message.from_user.id)
-    saved_sign = user.get("zodiac_sign", "").strip() if user else ""
+    saved_sign = (user.get("zodiac_sign") or "").strip() if user else ""
+    user_name = (user.get("first_name") or "Пользователь").strip()
+    
     if not saved_sign:
         return await message.answer("❓ Сначала узнай свой знак в разделе 🔮 Гороскоп!",
                                     reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏠 Главное меню")]], resize_keyboard=True))
@@ -397,7 +404,7 @@ async def calc_compat(message: types.Message):
     name = name_part.capitalize() if name_part else "Партнёр"
     
     await message.answer(
-        f"💕 {user.get('first_name', 'Пользователь')} ({saved_sign}) + {name} ({found_sign})\n\n"
+        f"💕 {user_name} ({saved_sign}) + {name} ({found_sign})\n\n"
         f"**Общая вибрация:** {data['vibe']}\n**Сильная сторона:** {data['plus']}\n"
         f"**Зона риска:** {data['minus']}\n**Совет звёзд:** {data['advice']}\n\n"
         f"💡 *Упрощённый расчёт по стихиям. Для детального анализа по датам и времени нужен Premium.*",
@@ -466,7 +473,7 @@ async def cmd_stats(message: types.Message):
     c.execute("SELECT COUNT(*) FROM users WHERE is_premium=1"); prem = c.fetchone()[0]; conn.close()
     await message.answer(f"📊 Статистика:\n👥 Всего: {total}\n💎 Premium: {prem}\n📈 Конверсия: {(prem/total*100) if total else 0:.1f}%")
 
-# 🌐 RENDER
+# 🌐 RENDER СЕРВЕР
 async def handle_health(request): return web.Response(text="OK 🤖")
 async def start_webserver(port):
     app = web.Application(); app.add_routes([web.get('/', handle_health), web.get('/health', handle_health)])
@@ -474,12 +481,14 @@ async def start_webserver(port):
     site = web.TCPSite(runner, '0.0.0.0', port); await site.start()
     logger.info(f"🌐 Веб-сервер на порту {port}"); return runner
 
+# ♻️ АВТО-ПЕРЕЗАПУСК
 async def run_with_restart():
     while True:
         try: logger.info("🔄 Запуск polling..."); await dp.start_polling(bot)
         except Exception as e: logger.error(f"💥 Ошибка: {e}. Перезапуск через 15с..."); await asyncio.sleep(15)
         await asyncio.sleep(5)
 
+# 🚀 ГЛАВНАЯ
 async def main():
     logger.info("🚀 Бот запускается..."); init_db()
     try: me = await bot.me(); logger.info(f"✅ Авторизован: @{me.username}")
