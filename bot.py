@@ -8,6 +8,7 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
+from aiohttp import web  # ← Добавили для Render
 
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -205,7 +206,6 @@ async def ask_ai(callback: types.CallbackQuery):
     
     await callback.message.answer("🔮 Напиши свой вопрос:")
     
-    # Простая обработка ответа
     @dp.message()
     async def handle_question(message: types.Message):
         await message.answer("🤖 Думаю...")
@@ -260,16 +260,34 @@ async def buy_pack(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# Заглушки для остальных кнопок
 @dp.callback_query(F.data.in_({"natal", "compat", "mercury", "numerology", "week", "invite"}))
 async def placeholders(callback: types.CallbackQuery):
     await callback.message.answer("🚧 Эта функция в разработке")
     await callback.answer()
 
+# ================= WEB SERVER ДЛЯ RENDER =================
+async def handle_health(request):
+    return web.Response(text="OK 🤖")
+
+async def start_web_server(port):
+    app = web.Application()
+    app.add_routes([web.get('/', handle_health), web.get('/health', handle_health)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"🌐 Health server running on port {port}")
+
 # ================= ЗАПУСК =================
 async def main():
     init_db()
     logging.info("🚀 Бот запускается...")
+    
+    # Запускаем веб-сервер для Render (чтобы не убивал бота)
+    port = int(os.getenv("PORT", 10000))
+    await start_web_server(port)
+    
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
