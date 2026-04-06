@@ -4,10 +4,12 @@ import os
 import sqlite3
 import random
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
 
 # ================= НАСТРОЙКИ =================
@@ -23,6 +25,17 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
 
+# ================= FSM (машина состояний) =================
+class OnboardingState(StatesGroup):
+    name = State()
+    birth_date = State()
+
+class QuestionState(StatesGroup):
+    waiting_question = State()
+
+class CompatibilityState(StatesGroup):
+    waiting_partner_sign = State()
+
 # ================= БАЗА ДАННЫХ =================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -34,7 +47,8 @@ def init_db():
         zodiac TEXT,
         free_credits INTEGER DEFAULT 1,
         last_login DATE,
-        is_premium INTEGER DEFAULT 0
+        is_premium INTEGER DEFAULT 0,
+        next_free_time TIMESTAMP
     )''')
     conn.commit()
     conn.close()
@@ -46,26 +60,38 @@ def get_user(tid):
     conn.close()
     return dict(user) if user else None
 
-def add_or_update_user(tid, name, birth_date=None, zodiac=None):
+def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn = sqlite3.connect(DB_NAME)
     today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     
     if not user:
-        conn.execute("INSERT INTO users (telegram_id, name, birth_date, zodiac, free_credits, last_login) VALUES (?, ?, ?, ?, 1, ?)",
-                     (tid, name, birth_date, zodiac, today))
+        next_free = datetime.now() + timedelta(hours=24)
+        conn.execute("""INSERT INTO users 
+            (telegram_id, name, birth_date, zodiac, free_credits, last_login, next_free_time) 
+            VALUES (?, ?, ?, ?, 1, ?, ?)""",
+            (tid, name, birth_date, zodiac, today, next_free))
     else:
         if user['last_login'] != today:
-            conn.execute("UPDATE users SET free_credits=1, last_login=?, name=? WHERE telegram_id=?", (today, name, tid))
+            next_free = datetime.now() + timedelta(hours=24)
+            conn.execute("""UPDATE users SET 
+                free_credits=1, last_login=?, next_free_time=?, 
+                name=COALESCE(?, name), birth_date=COALESCE(?, birth_date), 
+                zodiac=COALESCE(?, zodiac) WHERE telegram_id=?""",
+                (today, next_free, name, birth_date, zodiac, tid))
         else:
-            conn.execute("UPDATE users SET name=?, birth_date=COALESCE(?, birth_date), zodiac=COALESCE(?, zodiac) WHERE telegram_id=?",
-                         (name, birth_date, zodiac, tid))
+            conn.execute("""UPDATE users SET 
+                name=COALESCE(?, name), birth_date=COALESCE(?, birth_date), 
+                zodiac=COALESCE(?, zodiac) WHERE telegram_id=?""",
+                (name, birth_date, zodiac, tid))
     conn.commit()
     conn.close()
 
 def use_credit(tid):
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
+    next_free = datetime.now() + timedelta(hours=24)
+    conn.execute("UPDATE users SET free_credits = free_credits - 1, next_free_time=? WHERE telegram_id=?", 
+                 (next_free, tid))
     conn.commit()
     conn.close()
 
@@ -75,17 +101,8 @@ def set_premium(tid):
     conn.commit()
     conn.close()
 
-# ================= GROQ AI (с системным промптом!) =================
-async def ask_groq(question, user_sign=None):
-    system_prompt = """Ты профессиональный астролог с 20-летним опытом. 
-Твоя специализация: натальные карты, транзиты, синастрия, прогнозирование.
-Отвечай уверенно, без удивления вопросам про астрологию — это твоя работа.
-Стиль: мудрый, поддерживающий, но честный.
-Длина ответа: 100-200 слов."""
-    
-    if user_sign:
-        question = f"Знак пользователя: {user_sign}. Вопрос: {question}"
-    
+# ================= GROQ AI (НОВЫЙ ПРОМПТ!) =================
+async def ask_groq(prompt, system_prompt):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -95,9 +112,10 @@ async def ask_groq(question, user_sign=None):
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": question}
+                        {"role": "user", "content": prompt}
                     ],
-                    "max_tokens": 400
+                    "max_tokens": 600,
+                    "temperature": 0.7
                 }
             ) as resp:
                 if resp.status == 200:
@@ -106,6 +124,70 @@ async def ask_groq(question, user_sign=None):
                 return f"Ошибка AI: {resp.status}"
     except Exception as e:
         return f"Ошибка: {e}"
+
+# ================= ПРОМПТЫ (СТРУКТУРИРОВАННЫЕ!) =================
+PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом. 
+Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
+
+СТРУКТУРА ОТВЕТА (строго следуй!):
+
+# 🌙 Гороскоп для {name} на {date}
+
+⭐ **Энергетика дня**
+2-3 предложения об общей атмосфере дня
+
+💼 **Карьера/финансы**  
+2-3 предложения о работе и деньгах
+
+❤️ **Отношения**
+2-3 предложения о любви и общении
+
+💡 **Совет**
+1-2 предложения с практической рекомендацией
+
+Правила:
+- Пиши конкретно, без воды
+- Используй астрологические термины (Луна, Меркурий, аспекты)
+- Тон: поддерживающий, но честный
+- Длина: 150-250 слов"""
+
+PROMPT_NATAL = """Ты профессиональный астролог. 
+Составь НАТАЛЬНУЮ КАРТУ для человека, родившегося {birth_date}.
+
+СТРУКТУРА:
+
+# 🌌 Натальная карта
+
+♈ **Твой знак зодиака**: [знак]
+
+🌙 **Луна**: [эмоциональная природа]
+
+☀️ **Солнце**: [основная энергия]
+
+💫 **Основные аспекты**: [2-3 ключевых аспекта]
+
+🎯 **Твои сильные стороны**: [список]
+
+⚠️ **Зоны роста**: [список]
+
+Длина: 200-300 слов"""
+
+PROMPT_COMPAT = """Ты астролог-эксперт по совместимости.
+Рассчитай СОВМЕСТИМОСТЬ: {sign1} и {sign2}.
+
+СТРУКТУРА:
+
+# 💕 Совместимость: {sign1} + {sign2}
+
+🔥 **Общая вибрация**: [описание]
+
+✅ **Сильные стороны союза**: [2-3 пункта]
+
+⚠️ **Зоны риска**: [2-3 пункта]
+
+💡 **Совет звёзд**: [практический совет]
+
+Длина: 150-200 слов"""
 
 # ================= ТАРО =================
 TAROT_CARDS = [
@@ -133,27 +215,47 @@ TAROT_CARDS = [
     {"name": "Мир (XXI)", "desc": "Завершение и гармония. Ты на месте."}
 ]
 
-# ================= МЕНЮ (кнопки на всю ширину!) =================
-def get_menu(c_name, credits, is_prem):
+# ================= МЕНЮ (СЕТКА 2 КОЛОНКИ!) =================
+def get_menu_grid(name, credits, next_free_time, is_prem):
+    # Рассчитываем время до следующего бесплатного
+    if next_free_time:
+        try:
+            nf_time = datetime.fromisoformat(next_free_time)
+            now = datetime.now()
+            if nf_time > now and not is_prem:
+                delta = nf_time - now
+                hours, remainder = divmod(int(delta.total_seconds()), 3600)
+                minutes, _ = divmod(remainder, 60)
+                timer_text = f"⏳ Следующий: {hours}ч {minutes}мин"
+            else:
+                timer_text = "✨ Прогнозов: ∞" if is_prem else f"✨ Прогнозов: {credits}"
+        except:
+            timer_text = f"✨ Прогнозов: {credits}"
+    else:
+        timer_text = f"✨ Прогнозов: {credits}"
+    
     prem_text = "💎 PREMIUM (Активен)" if is_prem else "💎 Получить PREMIUM — 100 ⭐"
     prem_data = "premium_active" if is_prem else "buy_premium"
     
-    # Каждая кнопка в отдельной строке = на всю ширину
+    # СЕТКА 2 КОЛОНКИ
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"👋 Привет, {c_name}!", callback_data="noop")],
-        [InlineKeyboardButton(text=f"✨ Прогнозов: {credits}", callback_data="noop")],
+        [InlineKeyboardButton(text=f"👋 Привет, {name}!", callback_data="noop")],
+        [InlineKeyboardButton(text=timer_text, callback_data="noop")],
         
-        [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope")],
-        [InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot")],
-        [InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Вопрос Астрологу", callback_data="ask_ai")],
-        [InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
-        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")],
-        [InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+        [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope"),
+         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
         
-        [InlineKeyboardButton(text="💫 5 прогнозов — 50 ⭐", callback_data="buy_5")],
-        [InlineKeyboardButton(text="💫 15 прогнозов — 120 ⭐", callback_data="buy_15")],
+        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
+         InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
+        
+        [InlineKeyboardButton(text="🔮 Вопрос астрологу", callback_data="ask_ai"),
+         InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
+        
+        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
+         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+        
+        [InlineKeyboardButton(text="💫 5 прогнозов — 50 ⭐", callback_data="buy_5"),
+         InlineKeyboardButton(text="💫 15 прогнозов — 120 ⭐", callback_data="buy_15")],
         
         [InlineKeyboardButton(text=prem_text, callback_data=prem_data)],
         
@@ -161,14 +263,83 @@ def get_menu(c_name, credits, is_prem):
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
     ])
 
-# ================= ОБРАБОТЧИКИ =================
-
+# ================= ОНБОРДИНГ =================
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    add_or_update_user(message.from_user.id, message.from_user.first_name)
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     user = get_user(message.from_user.id)
-    await message.answer("🔮 Добро пожаловать в мир астрологии!", reply_markup=get_menu(user['name'], user['free_credits'], user['is_premium']))
+    
+    if user and user.get('name') and user.get('birth_date'):
+        # Уже зарегистрирован — показываем меню
+        await message.answer("🔮 Добро пожаловать в мир астрологии!", 
+                           reply_markup=get_menu_grid(user['name'], user['free_credits'], 
+                                                    user.get('next_free_time'), user['is_premium']))
+    else:
+        # Новый пользователь — начинаем онбординг
+        await message.answer("✨ Добро пожаловать в AstroAI!\n\n"
+                           "Я твой персональный астролог и провидец.\n"
+                           "Получи бесплатный астропрогноз прямо сейчас!\n\n"
+                           "✨ Как тебя зовут?")
+        await state.set_state(OnboardingState.name)
 
+@dp.message(OnboardingState.name)
+async def onboarding_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    await state.update_data(name=name)
+    await message.answer(f"✨ Прекрасное имя, {name}!\n\n"
+                        f"📅 Введи дату рождения в формате ДД.ММ.ГГГГ\n"
+                        f"Например: 15.03.1989")
+    await state.set_state(OnboardingState.birth_date)
+
+@dp.message(OnboardingState.birth_date)
+async def onboarding_birthdate(message: types.Message, state: FSMContext):
+    birth_date = message.text.strip()
+    
+    # Простая валидация
+    try:
+        datetime.strptime(birth_date, "%d.%m.%Y")
+    except:
+        await message.answer("❌ Неверный формат. Используй ДД.ММ.ГГГГ\nНапример: 15.03.1989")
+        return
+    
+    data = await state.get_data()
+    name = data.get('name', message.from_user.first_name)
+    
+    # Определяем знак зодиака
+    zodiac = calculate_zodiac(birth_date)
+    
+    # Сохраняем в БД
+    add_or_update_user(message.from_user.id, name, birth_date, zodiac)
+    
+    await message.answer(f"🎉 Готово, {name}!\n\n"
+                        f"♐ Твой знак: {zodiac}\n\n"
+                        f"Теперь выбери раздел:", 
+                        reply_markup=get_menu_grid(name, 1, None, False))
+    await state.clear()
+
+# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
+def calculate_zodiac(birth_date):
+    """Определяет знак зодиака по дате рождения"""
+    try:
+        date = datetime.strptime(birth_date, "%d.%m.%Y")
+        day, month = date.day, date.month
+        
+        if (month == 3 and day >= 21) or (month == 4 and day <= 19): return "♈ Овен"
+        if (month == 4 and day >= 20) or (month == 5 and day <= 20): return "♉ Телец"
+        if (month == 5 and day >= 21) or (month == 6 and day <= 20): return "♊ Близнецы"
+        if (month == 6 and day >= 21) or (month == 7 and day <= 22): return "♋ Рак"
+        if (month == 7 and day >= 23) or (month == 8 and day <= 22): return "♌ Лев"
+        if (month == 8 and day >= 23) or (month == 9 and day <= 22): return "♍ Дева"
+        if (month == 9 and day >= 23) or (month == 10 and day <= 22): return "♎ Весы"
+        if (month == 10 and day >= 23) or (month == 11 and day <= 21): return "♏ Скорпион"
+        if (month == 11 and day >= 22) or (month == 12 and day <= 21): return "♐ Стрелец"
+        if (month == 12 and day >= 22) or (month == 1 and day <= 19): return "♑ Козерог"
+        if (month == 1 and day >= 20) or (month == 2 and day <= 18): return "♒ Водолей"
+        return "♓ Рыбы"
+    except:
+        return "Не определён"
+
+# ================= ОБРАБОТЧИКИ КНОПОК =================
 @dp.callback_query(F.data == "noop")
 async def noop(callback: types.CallbackQuery):
     await callback.answer()
@@ -176,6 +347,10 @@ async def noop(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "horoscope")
 async def horoscope(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("❌ Сначала пройди /start", show_alert=True)
+        return
+    
     if not user['is_premium'] and user['free_credits'] <= 0:
         await callback.answer("❌ Нет бесплатных прогнозов. Купи пакет!", show_alert=True)
         return
@@ -183,9 +358,14 @@ async def horoscope(callback: types.CallbackQuery):
     use_credit(callback.from_user.id)
     await callback.message.answer("🌟 Генерирую гороскоп...")
     
-    sign = user.get('zodiac') or "общий"
-    ans = await ask_groq(f"Составь гороскоп на сегодня для знака {sign}", sign)
-    await callback.message.answer(f"🌟 **Гороскоп ({sign})**\n\n{ans}", parse_mode="Markdown")
+    sign = user.get('zodiac', 'Овен')
+    name = user.get('name', 'друг')
+    today = datetime.now().strftime("%d.%m.%Y")
+    
+    prompt = PROMPT_HOROSCOPE.format(sign=sign, name=name, date=today)
+    ans = await ask_groq(prompt, "Ты профессиональный астролог с 20-летним опытом.")
+    
+    await callback.message.answer(ans, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "tarot")
@@ -198,78 +378,106 @@ async def tarot(callback: types.CallbackQuery):
 async def ask_ai_menu(callback: types.CallbackQuery):
     await callback.message.answer("🔮 Напиши свой вопрос астрологу:")
     await callback.answer()
+    await dp.message.register(handle_ai_question, F.text)
+
+async def handle_ai_question(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if not user:
+        await message.answer("❌ Сначала пройди /start")
+        return
     
-    # Ждём сообщение с вопросом
-    @dp.message()
-    async def handle_ai_question(message: types.Message):
-        user = get_user(message.from_user.id)
-        if not user['is_premium'] and user['free_credits'] <= 0:
-            await message.answer("❌ Нет кредитов. Купи пакет!")
-            return
-        
-        await message.answer("🤖 Астролог думает...")
-        sign = user.get('zodiac')
-        ans = await ask_groq(message.text, sign)
-        await message.answer(f"🔮 **Ответ астролога:**\n\n{ans}", parse_mode="Markdown")
-        use_credit(message.from_user.id)
-        
-        # Удаляем этот обработчик, чтобы не срабатывал постоянно
-        dp.message.unregister(handle_ai_question)
+    if not user['is_premium'] and user['free_credits'] <= 0:
+        await message.answer("❌ Нет кредитов. Купи пакет!")
+        return
+    
+    await message.answer("🤖 Астролог думает...")
+    
+    sign = user.get('zodiac', 'общий')
+    prompt = f"Вопрос от {sign}: {message.text}"
+    ans = await ask_groq(prompt, "Ты профессиональный астролог. Отвечай конкретно и по делу.")
+    
+    await message.answer(f"🔮 **Ответ астролога:**\n\n{ans}", parse_mode="Markdown")
+    use_credit(message.from_user.id)
+    await state.clear()
 
 @dp.callback_query(F.data == "natal")
 async def natal(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
-    if not user.get('birth_date'):
-        await callback.message.answer("📅 Сначала укажи дату рождения (ДД.ММ.ГГГГ)")
+    if not user or not user.get('birth_date'):
+        await callback.message.answer("📅 Сначала укажи дату рождения через /start")
         await callback.answer()
         return
     
     await callback.message.answer("🌌 Генерирую натальную карту...")
-    ans = await ask_groq(f"Рассчитай натальную карту для человека, родившегося {user['birth_date']}. Знак: {user.get('zodiac', 'неизвестен')}", user.get('zodiac'))
-    await callback.message.answer(f"🌌 **Натальная карта**\n\n{ans}", parse_mode="Markdown")
+    
+    prompt = PROMPT_NATAL.format(birth_date=user['birth_date'])
+    ans = await ask_groq(prompt, "Ты профессиональный астролог-наталог.")
+    
+    await callback.message.answer(ans, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "compat")
-async def compat(callback: types.CallbackQuery):
-    await callback.message.answer("💕 Введи знак партнёра для расчёта совместимости:")
+async def compat_menu(callback: types.CallbackQuery):
+    await callback.message.answer("💕 Введи знак партнёра (например: Телец, Лев, Скорпион):")
     await callback.answer()
+    await dp.message.register(handle_compat_input, F.text)
+
+async def handle_compat_input(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if not user:
+        await message.answer("❌ Сначала пройди /start")
+        return
     
-    @dp.message()
-    async def handle_compat_input(message: types.Message):
-        user = get_user(message.from_user.id)
-        my_sign = user.get('zodiac', 'неизвестен')
-        partner_sign = message.text.strip()
-        
-        await message.answer("💕 Рассчитываю совместимость...")
-        ans = await ask_groq(f"Совместимость {my_sign} и {partner_sign}", my_sign)
-        await message.answer(f"💕 **Совместимость: {my_sign} + {partner_sign}**\n\n{ans}", parse_mode="Markdown")
-        dp.message.unregister(handle_compat_input)
+    my_sign = user.get('zodiac', 'неизвестен')
+    partner_sign = message.text.strip()
+    
+    await message.answer("💕 Рассчитываю совместимость...")
+    
+    prompt = PROMPT_COMPAT.format(sign1=my_sign, sign2=partner_sign)
+    ans = await ask_groq(prompt, "Ты астролог-эксперт по совместимости.")
+    
+    await message.answer(ans, parse_mode="Markdown")
+    await state.clear()
 
 @dp.callback_query(F.data == "mercury")
 async def mercury(callback: types.CallbackQuery):
-    ans = await ask_groq("Сейчас ретроградный Меркурий? Какие советы?", None)
+    await callback.message.answer("🪐 Проверяю статус Меркурия...")
+    
+    prompt = "Сейчас ретроградный Меркурий? Дай советы на этот период."
+    ans = await ask_groq(prompt, "Ты астролог. Отвечай конкретно.")
+    
     await callback.message.answer(f"🪐 **Ретроградный Меркурий**\n\n{ans}", parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "numerology")
 async def numerology(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
-    if not user.get('birth_date'):
+    if not user or not user.get('birth_date'):
         await callback.message.answer("📅 Сначала укажи дату рождения")
         await callback.answer()
         return
     
     await callback.message.answer("🔢 Рассчитываю число жизненного пути...")
-    ans = await ask_groq(f"Рассчитай нумерологию для даты {user['birth_date']}", None)
+    
+    prompt = f"Рассчитай нумерологию для даты {user['birth_date']}. Найди число жизненного пути и дай трактовку."
+    ans = await ask_groq(prompt, "Ты профессиональный нумеролог.")
+    
     await callback.message.answer(f"🔢 **Нумерология**\n\n{ans}", parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "week")
 async def week(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("❌ Сначала пройди /start", show_alert=True)
+        return
+    
     sign = user.get('zodiac', 'общий')
     await callback.message.answer("📅 Генерирую прогноз на неделю...")
-    ans = await ask_groq(f"Прогноз на неделю для знака {sign}", sign)
+    
+    prompt = f"Составь прогноз на неделю для знака {sign}. Структура: общая тема, карьера, отношения, совет."
+    ans = await ask_groq(prompt, "Ты профессиональный астролог.")
+    
     await callback.message.answer(f"📅 **Прогноз на неделю ({sign})**\n\n{ans}", parse_mode="Markdown")
     await callback.answer()
 
@@ -298,7 +506,7 @@ async def successful_payment(message: types.Message):
     user = get_user(message.from_user.id)
     await message.answer("🎉 **Оплата прошла!** Premium активирован.", 
                         parse_mode="Markdown",
-                        reply_markup=get_menu(user['name'], 999, True))
+                        reply_markup=get_menu_grid(user['name'], 999, None, True))
 
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(callback: types.CallbackQuery):
@@ -325,14 +533,20 @@ async def invite(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "edit")
 async def edit(callback: types.CallbackQuery):
-    await callback.message.answer("✏️ Введи дату рождения (ДД.ММ.ГГГГ):")
+    await callback.message.answer("✏️ Введи новую дату рождения (ДД.ММ.ГГГГ):")
     await callback.answer()
-    
-    @dp.message()
-    async def save_edit(message: types.Message):
-        add_or_update_user(message.from_user.id, message.from_user.first_name, birth_date=message.text)
-        await message.answer("✅ Данные сохранены!")
-        dp.message.unregister(save_edit)
+    await dp.message.register(save_edit, F.text)
+
+async def save_edit(message: types.Message, state: FSMContext):
+    birth_date = message.text.strip()
+    try:
+        datetime.strptime(birth_date, "%d.%m.%Y")
+        zodiac = calculate_zodiac(birth_date)
+        add_or_update_user(message.from_user.id, birth_date=birth_date, zodiac=zodiac)
+        await message.answer("✅ Данные обновлены!")
+    except:
+        await message.answer("❌ Неверный формат. Используй ДД.ММ.ГГГГ")
+    await state.clear()
 
 # ================= WEB SERVER ДЛЯ RENDER =================
 async def handle_health(request):
