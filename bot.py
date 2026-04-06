@@ -8,14 +8,14 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
-from aiohttp import web  # ← Добавили для Render
+from aiohttp import web
 
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
+    logging.error("❌ Ошибка: Проверь переменные окружения")
     exit()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -75,8 +75,17 @@ def set_premium(tid):
     conn.commit()
     conn.close()
 
-# ================= GROQ AI =================
-async def ask_groq(prompt, system_prompt="Ты эксперт-астролог. Отвечай кратко и по делу."):
+# ================= GROQ AI (с системным промптом!) =================
+async def ask_groq(question, user_sign=None):
+    system_prompt = """Ты профессиональный астролог с 20-летним опытом. 
+Твоя специализация: натальные карты, транзиты, синастрия, прогнозирование.
+Отвечай уверенно, без удивления вопросам про астрологию — это твоя работа.
+Стиль: мудрый, поддерживающий, но честный.
+Длина ответа: 100-200 слов."""
+    
+    if user_sign:
+        question = f"Знак пользователя: {user_sign}. Вопрос: {question}"
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -86,9 +95,9 @@ async def ask_groq(prompt, system_prompt="Ты эксперт-астролог. 
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": question}
                     ],
-                    "max_tokens": 500
+                    "max_tokens": 400
                 }
             ) as resp:
                 if resp.status == 200:
@@ -96,7 +105,7 @@ async def ask_groq(prompt, system_prompt="Ты эксперт-астролог. 
                     return data['choices'][0]['message']['content']
                 return f"Ошибка AI: {resp.status}"
     except Exception as e:
-        return f"Ошибка соединения с AI: {e}"
+        return f"Ошибка: {e}"
 
 # ================= ТАРО =================
 TAROT_CARDS = [
@@ -124,29 +133,27 @@ TAROT_CARDS = [
     {"name": "Мир (XXI)", "desc": "Завершение и гармония. Ты на месте."}
 ]
 
-# ================= МЕНЮ =================
+# ================= МЕНЮ (кнопки на всю ширину!) =================
 def get_menu(c_name, credits, is_prem):
     prem_text = "💎 PREMIUM (Активен)" if is_prem else "💎 Получить PREMIUM — 100 ⭐"
     prem_data = "premium_active" if is_prem else "buy_premium"
     
+    # Каждая кнопка в отдельной строке = на всю ширину
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"👋 Привет, {c_name}!", callback_data="noop")],
         [InlineKeyboardButton(text=f"✨ Прогнозов: {credits}", callback_data="noop")],
         
-        [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope")],
+        [InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot")],
+        [InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
+        [InlineKeyboardButton(text="🔮 Вопрос Астрологу", callback_data="ask_ai")],
+        [InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
+        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")],
+        [InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         
-        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
-        
-        [InlineKeyboardButton(text="🔮 Вопрос Астрологу", callback_data="ask_ai"),
-         InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
-        
-        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
-        
-        [InlineKeyboardButton(text="💫 5 прогнозов — 50 ⭐", callback_data="buy_5"),
-         InlineKeyboardButton(text="💫 15 прогнозов — 120 ⭐", callback_data="buy_15")],
+        [InlineKeyboardButton(text="💫 5 прогнозов — 50 ⭐", callback_data="buy_5")],
+        [InlineKeyboardButton(text="💫 15 прогнозов — 120 ⭐", callback_data="buy_15")],
         
         [InlineKeyboardButton(text=prem_text, callback_data=prem_data)],
         
@@ -166,16 +173,6 @@ async def cmd_start(message: types.Message):
 async def noop(callback: types.CallbackQuery):
     await callback.answer()
 
-@dp.callback_query(F.data == "edit")
-async def cmd_edit(callback: types.CallbackQuery):
-    await callback.message.answer("✏️ Введи дату рождения (ДД.ММ.ГГГГ):")
-    await callback.answer()
-
-@dp.message(F.text.regexp(r"\d{2}\.\d{2}\.\d{4}"))
-async def save_birthdate(message: types.Message):
-    add_or_update_user(message.from_user.id, message.from_user.first_name, birth_date=message.text)
-    await message.answer("✅ Дата сохранена!")
-
 @dp.callback_query(F.data == "horoscope")
 async def horoscope(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
@@ -186,9 +183,9 @@ async def horoscope(callback: types.CallbackQuery):
     use_credit(callback.from_user.id)
     await callback.message.answer("🌟 Генерирую гороскоп...")
     
-    sign = user['zodiac'] or "общий"
-    ans = await ask_groq(f"Составь короткий гороскоп на сегодня для знака {sign}.")
-    await callback.message.answer(f"🌟 **Гороскоп**\n\n{ans}", parse_mode="Markdown")
+    sign = user.get('zodiac') or "общий"
+    ans = await ask_groq(f"Составь гороскоп на сегодня для знака {sign}", sign)
+    await callback.message.answer(f"🌟 **Гороскоп ({sign})**\n\n{ans}", parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "tarot")
@@ -198,22 +195,82 @@ async def tarot(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data == "ask_ai")
-async def ask_ai(callback: types.CallbackQuery):
+async def ask_ai_menu(callback: types.CallbackQuery):
+    await callback.message.answer("🔮 Напиши свой вопрос астрологу:")
+    await callback.answer()
+    
+    # Ждём сообщение с вопросом
+    @dp.message()
+    async def handle_ai_question(message: types.Message):
+        user = get_user(message.from_user.id)
+        if not user['is_premium'] and user['free_credits'] <= 0:
+            await message.answer("❌ Нет кредитов. Купи пакет!")
+            return
+        
+        await message.answer("🤖 Астролог думает...")
+        sign = user.get('zodiac')
+        ans = await ask_groq(message.text, sign)
+        await message.answer(f"🔮 **Ответ астролога:**\n\n{ans}", parse_mode="Markdown")
+        use_credit(message.from_user.id)
+        
+        # Удаляем этот обработчик, чтобы не срабатывал постоянно
+        dp.message.unregister(handle_ai_question)
+
+@dp.callback_query(F.data == "natal")
+async def natal(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id)
-    if not user['is_premium'] and user['free_credits'] <= 0:
-        await callback.answer("❌ Нет кредитов.", show_alert=True)
+    if not user.get('birth_date'):
+        await callback.message.answer("📅 Сначала укажи дату рождения (ДД.ММ.ГГГГ)")
+        await callback.answer()
         return
     
-    await callback.message.answer("🔮 Напиши свой вопрос:")
+    await callback.message.answer("🌌 Генерирую натальную карту...")
+    ans = await ask_groq(f"Рассчитай натальную карту для человека, родившегося {user['birth_date']}. Знак: {user.get('zodiac', 'неизвестен')}", user.get('zodiac'))
+    await callback.message.answer(f"🌌 **Натальная карта**\n\n{ans}", parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "compat")
+async def compat(callback: types.CallbackQuery):
+    await callback.message.answer("💕 Введи знак партнёра для расчёта совместимости:")
+    await callback.answer()
     
     @dp.message()
-    async def handle_question(message: types.Message):
-        await message.answer("🤖 Думаю...")
-        ans = await ask_groq(f"Астрологический ответ на вопрос: {message.text}")
-        await message.answer(f"🔮 **Ответ звёзд:**\n\n{ans}", parse_mode="Markdown")
-        use_credit(message.from_user.id)
-        dp.message.unregister(handle_question)
+    async def handle_compat_input(message: types.Message):
+        user = get_user(message.from_user.id)
+        my_sign = user.get('zodiac', 'неизвестен')
+        partner_sign = message.text.strip()
+        
+        await message.answer("💕 Рассчитываю совместимость...")
+        ans = await ask_groq(f"Совместимость {my_sign} и {partner_sign}", my_sign)
+        await message.answer(f"💕 **Совместимость: {my_sign} + {partner_sign}**\n\n{ans}", parse_mode="Markdown")
+        dp.message.unregister(handle_compat_input)
+
+@dp.callback_query(F.data == "mercury")
+async def mercury(callback: types.CallbackQuery):
+    ans = await ask_groq("Сейчас ретроградный Меркурий? Какие советы?", None)
+    await callback.message.answer(f"🪐 **Ретроградный Меркурий**\n\n{ans}", parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "numerology")
+async def numerology(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user.get('birth_date'):
+        await callback.message.answer("📅 Сначала укажи дату рождения")
+        await callback.answer()
+        return
     
+    await callback.message.answer("🔢 Рассчитываю число жизненного пути...")
+    ans = await ask_groq(f"Рассчитай нумерологию для даты {user['birth_date']}", None)
+    await callback.message.answer(f"🔢 **Нумерология**\n\n{ans}", parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "week")
+async def week(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id)
+    sign = user.get('zodiac', 'общий')
+    await callback.message.answer("📅 Генерирую прогноз на неделю...")
+    ans = await ask_groq(f"Прогноз на неделю для знака {sign}", sign)
+    await callback.message.answer(f"📅 **Прогноз на неделю ({sign})**\n\n{ans}", parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
@@ -260,10 +317,22 @@ async def buy_pack(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@dp.callback_query(F.data.in_({"natal", "compat", "mercury", "numerology", "week", "invite"}))
-async def placeholders(callback: types.CallbackQuery):
-    await callback.message.answer("🚧 Эта функция в разработке")
+@dp.callback_query(F.data == "invite")
+async def invite(callback: types.CallbackQuery):
+    invite_link = f"https://t.me/{(await bot.me()).username}?start=ref_{callback.from_user.id}"
+    await callback.message.answer(f"👥 Твоя реферальная ссылка:\n{invite_link}\n\n+1 прогноз за каждого друга!")
     await callback.answer()
+
+@dp.callback_query(F.data == "edit")
+async def edit(callback: types.CallbackQuery):
+    await callback.message.answer("✏️ Введи дату рождения (ДД.ММ.ГГГГ):")
+    await callback.answer()
+    
+    @dp.message()
+    async def save_edit(message: types.Message):
+        add_or_update_user(message.from_user.id, message.from_user.first_name, birth_date=message.text)
+        await message.answer("✅ Данные сохранены!")
+        dp.message.unregister(save_edit)
 
 # ================= WEB SERVER ДЛЯ RENDER =================
 async def handle_health(request):
@@ -282,12 +351,8 @@ async def start_web_server(port):
 async def main():
     init_db()
     logging.info("🚀 Бот запускается...")
-    
-    # Запускаем веб-сервер для Render (чтобы не убивал бота)
     port = int(os.getenv("PORT", 10000))
     await start_web_server(port)
-    
-    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
