@@ -66,7 +66,6 @@ def get_user(tid):
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
-        # Ежедневный сброс бесплатных прогнозов
         if user['last_reset_date'] != today and not user['is_premium']:
             conn = sqlite3.connect(DB_NAME)
             conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
@@ -202,73 +201,79 @@ PROMPT_VEDANA = """
 Тон: авторитетный, мягкий. Без общих фраз. 200-300 слов.
 """
 
-# ==================== ТАРО ====================
-TAROT_CARDS = [
-    {"name": "Шут (0)", "desc": "Начало пути, спонтанность. Рискни!"},
-    {"name": "Маг (I)", "desc": "Сила воли. У тебя есть все ресурсы."},
-    {"name": "Жрица (II)", "desc": "Интуиция. Слушай внутренний голос."},
-    {"name": "Императрица (III)", "desc": "Плодородие. Время творить."},
-    {"name": "Император (IV)", "desc": "Власть. Нужна дисциплина."},
-    {"name": "Иерофант (V)", "desc": "Традиции. Ищи наставника."},
-    {"name": "Влюбленные (VI)", "desc": "Выбор и любовь."},
-    {"name": "Колесница (VII)", "desc": "Победа. Не сдавайся."},
-    {"name": "Сила (VIII)", "desc": "Терпение. Мягкая сила."},
-    {"name": "Отшельник (IX)", "desc": "Поиск истины внутри."},
-    {"name": "Колесо Фортуны (X)", "desc": "Перемены. Всё идет по плану."},
-    {"name": "Справедливость (XI)", "desc": "Карма. По заслугам."},
-    {"name": "Повешенный (XII)", "desc": "Новый взгляд."},
-    {"name": "Смерть (XIII)", "desc": "Трансформация."},
-    {"name": "Умеренность (XIV)", "desc": "Баланс."},
-    {"name": "Дьявол (XV)", "desc": "Искушения."},
-    {"name": "Башня (XVI)", "desc": "Внезапные перемены."},
-    {"name": "Звезда (XVII)", "desc": "Надежда."},
-    {"name": "Луна (XVIII)", "desc": "Иллюзии."},
-    {"name": "Солнце (XIX)", "desc": "Радость."},
-    {"name": "Суд (XX)", "desc": "Возрождение."},
-    {"name": "Мир (XXI)", "desc": "Гармония."}
-]
-
-# ==================== ТЕНЕВЫЕ ФРАЗЫ (ВОРОНКА) ====================
+# ==================== ТЕНЕВЫЕ ФРАЗЫ ====================
 SHADOWS = {
-    "horoscope": [
-        "🕯️ *Но есть аспект, который требует более глубокого изучения...*",
-        "✨ *Этот знак — лишь верхушка. Глубинный смысл раскроется в личной консультации.*",
-        "🔮 *Звёзды шепчут о важном. Хочешь узнать точную дату?*"
-    ],
-    "natal": [
-        "🌑 *Карта открыта, но судьба хранит ещё один секрет...*",
-        "✨ *Натальная карта показывает потенциал. Личная консультация Веданы активирует его.*"
-    ],
-    "tarot": [
-        "🔮 *Карта выпала не случайно. За ней скрывается послание именно для тебя...*",
-        "🕯️ *Расклад завершён, но вопрос остаётся открытым. Ведана знает ответ.*"
-    ],
-    "compat": [
-        "💕 *Совместимость рассчитана. Но как пройти через зоны риска? Ведана подскажет путь.*",
-        "✨ *Звёзды видят союз иначе. Личная консультация раскроет скрытые аспекты.*"
-    ],
-    "ball": [
-        "🔮 *Шар ответил, но эхо остаётся. Хочешь услышать его от самой Веданы?*",
-        "🌑 *Ответ получен. Следующий шаг требует мудрости опытного астролога.*"
-    ],
-    "week": [
-        "📅 *Неделя обещает перемены. Будь готов(а) к знакам...*",
-        "✨ *Прогноз составлен. Детали скрыты в личной консультации.*"
-    ],
-    "numerology": [
-        "🔢 *Число пути найдено. Но как его пройти без потерь?*",
-        "🕯️ *Нумерология открыла дверь. Ведана поможет войти.*"
-    ],
-    "mercury": [
-        "🪐 *Меркурий влияет на всех, но на тебя — особенно. Проверь личный прогноз.*",
-        "✨ *Ретроградность — время для внутренней работы. Ведана направит.*"
-    ]
+    "horoscope": ["🕯️ *Но есть аспект, который требует более глубокого изучения...*", "✨ *Этот знак — лишь верхушка. Глубинный смысл раскроется в личной консультации.*", "🔮 *Звёзды шепчут о важном. Хочешь узнать точную дату?*"],
+    "natal": ["🌑 *Карта открыта, но судьба хранит ещё один секрет...*", "✨ *Натальная карта показывает потенциал. Личная консультация Веданы активирует его.*"],
+    "tarot": ["🔮 *Карта выпала не случайно. За ней скрывается послание именно для тебя...*", "🕯️ *Расклад завершён, но вопрос остаётся открытым. Ведана знает ответ.*"],
+    "compat": ["💕 *Совместимость рассчитана. Но как пройти через зоны риска? Ведана подскажет путь.*", "✨ *Звёзды видят союз иначе. Личная консультация раскроет скрытые аспекты.*"],
+    "ball": ["🔮 *Шар ответил, но эхо остаётся. Хочешь услышать его от самой Веданы?*", "🌑 *Ответ получен. Следующий шаг требует мудрости опытного астролога.*"],
+    "week": ["📅 *Неделя обещает перемены. Будь готов(а) к знакам...*", "✨ *Прогноз составлен. Детали скрыты в личной консультации.*"],
+    "numerology": ["🔢 *Число пути найдено. Но как его пройти без потерь?*", "🕯️ *Нумерология открыла дверь. Ведана поможет войти.*"],
+    "mercury": ["🪐 *Меркурий влияет на всех, но на тебя — особенно. Проверь личный прогноз.*", "✨ *Ретроградность — время для внутренней работы. Ведана направит.*"]
 }
 
 def get_shadow(pred_type):
     return "\n\n" + random.choice(SHADOWS.get(pred_type, ["🔮 *Звёзды видят больше...*"]))
 
+# ==================== ТАРО (РАСШИРЕННОЕ) ====================
+TAROT_CARDS = [
+    {"name": "🃏 Шут (0)", "desc": "🌬️ **Начало пути, чистый лист.**\n\n✨ Ты стоишь на пороге нового цикла. Вселенная приглашает отпустить контроль и довериться потоку.\n💫 Сейчас не время для долгих раздумий. Спонтанность станет проводником.\n🕊️ Рискни там, где раньше боялся. Удача любит смелых."},
+    {"name": "🎩 Маг (I)", "desc": "🔮 **Сила воли и мастерство.**\n\n✨ У тебя в руках все инструменты для успеха. Нужно лишь сфокусировать намерение.\n💫 Твои слова и мысли материализуются быстрее обычного.\n⚡ Действуй осознанно: ты создаёшь свою реальность прямо сейчас."},
+    {"name": "📜 Жрица (II)", "desc": "🌙 **Интуиция и тайны.**\n\n✨ Ответы уже внутри тебя. Прислушайся к тихому голосу подсознания.\n💫 Сны и знаки будут особенно яркими в ближайшие дни.\n🤫 Не торопи события. Мудрость приходит в тишине."},
+    {"name": "👑 Императрица (III)", "desc": "🌿 **Плодородие и изобилие.**\n\n✨ Время творить, nurturing и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом, не требуя мгновенных результатов."},
+    {"name": "🏛️ Император (IV)", "desc": "⚖️ **Власть и структура.**\n\n✨ Нужна дисциплина и чёткий план. Хаос отступает перед порядком.\n💫 Возьми ответственность за свою жизнь в свои руки.\n🛡️ Установи границы: они защитят твою энергию."},
+    {"name": "🔑 Иерофант (V)", "desc": "📖 **Традиции и обучение.**\n\n✨ Ищи наставника или обратись к проверенным знаниям.\n💫 Духовные практики и ритуалы принесут ясность.\n Объединение с единомышленниками усилит твой путь."},
+    {"name": "💞 Влюбленные (VI)", "desc": "❤️ **Выбор и любовь.**\n\n✨ Перед тобой стоит важный выбор. Слушай сердце, но не игнорируй разум.\n💫 Гармония в отношениях возможна через честность.\n🦋 Принятие решения откроет новую дверь."},
+    {"name": "🏇 Колесница (VII)", "desc": "🔥 **Победа и движение.**\n\n✨ Ты на верном пути. Не сворачивай, даже если ветер встречный.\n💫 Контролируй эмоции: они могут увести в сторону.\n🏆 Успех ближе, чем кажется. Действуй решительно."},
+    {"name": "🦁 Сила (VIII)", "desc": "🌸 **Терпение и мужество.**\n\n✨ Настоящая сила — в мягкости и самообладании.\n💫 Укроти внутренние страхи любовью, а не борьбой.\n🕊️ Ты справишься с любым испытанием, сохраняя достоинство."},
+    {"name": "🕯️ Отшельник (IX)", "desc": "🌌 **Поиск истины.**\n\n✨ Время для уединения и глубокого самоанализа.\n💫 Внешний шум мешает слышать внутренний компас.\n🔦 Твой собственный свет укажет путь. Не бойся одиночества."},
+    {"name": "🎡 Колесо Фортуны (X)", "desc": "🔄 **Перемены и судьба.**\n\n✨ Цикл завершается, начинается новый. Всё идёт по плану высших сил.\n💫 Удача поворачивается к тебе лицом. Используй момент.\n🌊 Плыви по течению, но держи руль."},
+    {"name": "⚖️ Справедливость (XI)", "desc": "📜 **Карма и правда.**\n\n✨ Ты получишь ровно то, что заслужил. Честность вознаграждается.\n💫 Юридические или важные договорные вопросы решатся в твою пользу.\n🕊️ Принимай решения с холодной головой и чистым сердцем."},
+    {"name": "🙃 Повешенный (XII)", "desc": "️ **Жертва и новый взгляд.**\n\n✨ Иногда нужно остановиться, чтобы увидеть картину целиком.\n💫 Отпусти старое, чтобы освободить место для нового.\n🌿 Пауза — это не поражение, а стратегическая мудрость."},
+    {"name": "💀 Смерть (XIII)", "desc": "🦋 **Трансформация.**\n\n✨ Что-то должно уйти, чтобы родилось нечто большее.\n💫 Не цепляйся за прошлое. Трансформация неизбежна и благодатна.\n🌅 Закат всегда предшествует рассвету. Доверься процессу."},
+    {"name": "⏳ Умеренность (XIV)", "desc": "💧 **Баланс и терпение.**\n\n✨ Ищи золотую середину во всём. Крайности сейчас опасны.\n💫 Исцеление приходит через гармонию и спокойствие.\n🕊️ Смешивай противоположности: так рождается алхимия успеха."},
+    {"name": "⛓️ Дьявол (XV)", "desc": "🔥 **Искушения и зависимости.**\n\n✨ Осознай, что держит тебя в плену: страх, привычка или чужое мнение.\n💫 Цепи существуют только в твоей голове. Ты свободен освободиться.\n🌑 Тень требует внимания, а не подавления."},
+    {"name": "🏰 Башня (XVI)", "desc": "⚡ **Внезапные перемены.**\n\n✨ Старые структуры рушатся, чтобы освободить место для истины.\n💫 Шок временный. За разрушением следует очищение.\n🌩️ Не сопротивляйся. Позволь молнии сжечь иллюзии."},
+    {"name": "⭐ Звезда (XVII)", "desc": "🌠 **Надежда и вдохновение.**\n\n✨ После бури наступает ясность. Верь в свою мечту.\n💫 Вселенная посылает тебе знаки поддержки. Замечай их.\n💧 Исцеление уже в пути. Сохраняй веру."},
+    {"name": "🌑 Луна (XVIII)", "desc": "🌊 **Иллюзии и страхи.**\n\n✨ Не всё то, чем кажется. Доверяй фактам, а не догадкам.\n💫 Подсознание активно. Сны могут нести важные послания.\n🌫️ Пройди через туман сомнений: за ним ждёт берег."},
+    {"name": "☀️ Солнце (XIX)", "desc": "🌻 **Радость и успех.**\n\n✨ Ясность, тепло и витальность наполняют твою жизнь.\n💫 Проекты завершаются успешно. Дети и творчество приносят счастье.\n🔆 Наслаждайся моментом: ты в потоке изобилия."},
+    {"name": "📯 Суд (XX)", "desc": "🔔 **Возрождение и призыв.**\n\n✨ Пришло время подвести итоги и ответить на зов судьбы.\n💫 Прошлые ошибки прощены. Начинай с чистого листа.\n🕊️ Пробуждение сознания меняет всё. Действуй по высшему импульсу."},
+    {"name": "🌍 Мир (XXI)", "desc": "🕊️ **Завершение и гармония.**\n\n✨ Цикл успешно завершён. Ты целостен и в ладу с миром.\n💫 Путешествия, обучение и расширение горизонтов благоприятны.\n🌐 Ты на своём месте. Наслаждайся плодами труда."}
+]
+
 # ==================== КЛАВИАТУРЫ ====================
+def get_menu_grid(user):
+    name = user['name']
+    free_txt = "∞/∞" if user['is_premium'] else f"{user['free_credits']}/3"
+    vedana_c = user['vedana_credits']
+    
+    # Кнопка Веданы ведёт в магазин, если кредитов 0 и нет премиума
+    vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"👋 {name}!", callback_data="noop")],
+        
+        [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
+         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        
+        [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot"),
+         InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
+        
+        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
+         InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
+        
+        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
+         InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
+         
+        [InlineKeyboardButton(text="💎 Магазин", callback_data="shop")],
+        
+        [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
+        [InlineKeyboardButton(text=f"🔮 Индивидуальное предсказание от Веданы ({vedana_c})", callback_data=vedana_cb)],
+        
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
+    ])
+
 def get_bottom_menu():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="/start")]],
@@ -290,47 +295,33 @@ def get_shop_kb():
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
-def get_menu_grid(name, free_c, vedana_c, is_prem):
-    free_txt = "✨ ∞ прогнозов" if is_prem else f"✨ Осталось: {free_c}/3"
-    vedana_txt = f"🔮 Вед: {vedana_c}"
-    
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"👋 {name}!", callback_data="noop")],
-        [InlineKeyboardButton(text=free_txt, callback_data="noop")],
-        [InlineKeyboardButton(text=vedana_txt, callback_data="shop")], # Кнопка баланса ведет в магазин если 0
-        
-        [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        
-        [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
-        
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
-         InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
-        
-        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
-        
-        [InlineKeyboardButton(text="💎 Магазин", callback_data="shop")],
-        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
-    ])
-
 # ==================== ОНБОРДИНГ ====================
 @dp.message(Command("start"))
+@dp.message(F.text == "/start")
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
     
     if user and user.get('name'):
-        await message.answer("🔮 Главное меню", 
-                           reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+        # ВСЕГДА отправляем фото с главным меню
+        caption = f"🌌 **Я — Ведана.**\n\nЗвёзды готовы открыть свои тайны, {user['name']}."
+        try:
+            await bot.send_photo(
+                chat_id=message.chat.id,
+                photo=types.FSInputFile("vedana.jpg"),
+                caption=caption,
+                reply_markup=get_menu_grid(user),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.warning(f"Фото не найдено: {e}")
+            await message.answer(caption, reply_markup=get_menu_grid(user), parse_mode="Markdown")
     else:
         welcome = "🌌 **Я — Ведана.**\n\nНапиши: **имя**, **дату рождения** (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
         try:
             photo = types.FSInputFile("vedana.jpg")
             await bot.send_photo(message.chat.id, photo, welcome, parse_mode="Markdown")
-        except Exception as e:
-            logging.warning(f"Фото не найдено: {e}")
+        except:
             await message.answer(welcome, parse_mode="Markdown")
         
         await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
@@ -355,8 +346,18 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     zodiac = calculate_zodiac(message.text.strip())
     add_or_update_user(message.from_user.id, name, message.text.strip(), zodiac)
     
-    await message.answer(f"♐ Знак: {zodiac}\n\nВыбери раздел:", 
-                        reply_markup=get_menu_grid(name, 3, 0, False))
+    # После регистрации тоже показываем фото с меню
+    caption = f"♐ Знак: {zodiac}\n\nВыбери раздел, {name}:"
+    try:
+        await bot.send_photo(
+            chat_id=message.chat.id,
+            photo=types.FSInputFile("vedana.jpg"),
+            caption=caption,
+            reply_markup=get_menu_grid(get_user(message.from_user.id)),
+            parse_mode="Markdown"
+        )
+    except:
+        await message.answer(caption, reply_markup=get_menu_grid(get_user(message.from_user.id)), parse_mode="Markdown")
     await state.clear()
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
@@ -387,15 +388,20 @@ def send_pred(msg, text):
 @dp.callback_query(F.data == "noop")
 async def noop(cb: types.CallbackQuery): await cb.answer()
 
-@dp.message(F.text == "/start")
-async def start_btn(msg: types.Message, state: FSMContext):
-    await cmd_start(msg, state)
-
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_cb(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if user:
-        await cb.message.edit_text("🔮 Главное меню", reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+        caption = f"🌌 **Я — Ведана.**\n\nЗвёзды готовы открыть свои тайны, {user['name']}."
+        try:
+            await cb.message.answer_photo(
+                photo=types.FSInputFile("vedana.jpg"),
+                caption=caption,
+                reply_markup=get_menu_grid(user),
+                parse_mode="Markdown"
+            )
+        except:
+            await cb.message.answer(caption, reply_markup=get_menu_grid(user), parse_mode="Markdown")
     await cb.answer()
 
 @dp.callback_query(F.data == "shop")
@@ -511,8 +517,13 @@ async def mercury(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data == "tarot")
 async def tarot(cb: types.CallbackQuery):
+    user = get_user(cb.from_user.id)
+    if not user or not check_free(user, cb): return
+    use_free_credit(cb.from_user.id)
+    
     card = random.choice(TAROT_CARDS)
-    await send_pred(cb.message, f"🃏 {card['name']}\n\n{card['desc']}" + get_shadow("tarot"))
+    text = f"🔮 **Карты говорят...**\n\n{card['desc']}\n\n{get_shadow('tarot')}"
+    await send_pred(cb.message, text)
     await cb.answer()
 
 @dp.callback_query(F.data == "vedana_pred")
@@ -521,7 +532,7 @@ async def vedana_pred(cb: types.CallbackQuery):
     if not user:
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
-    if user['vedana_credits'] <= 0:
+    if user['vedana_credits'] <= 0 and not user['is_premium']:
         await cb.message.answer("🔮 У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
         await cb.answer()
         return
@@ -529,7 +540,8 @@ async def vedana_pred(cb: types.CallbackQuery):
     await cb.message.answer("🕯️ Ведана изучает вашу карту...")
     prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
     ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
-    use_vedana_credit(cb.from_user.id)
+    if not user['is_premium']:
+        use_vedana_credit(cb.from_user.id)
     await send_pred(cb.message, ans)
     await cb.answer()
 
@@ -545,7 +557,7 @@ async def save_edit(msg: types.Message, state: FSMContext):
         datetime.strptime(msg.text.strip(), "%d.%m.%Y")
         zodiac = calculate_zodiac(msg.text.strip())
         add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
-        await msg.answer("✅ Обновлено!", reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+        await msg.answer("✅ Обновлено!", reply_markup=get_menu_grid(user))
     except:
         await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
     await state.clear()
@@ -583,7 +595,7 @@ async def pay_success(msg: types.Message):
         
     user = get_user(msg.from_user.id)
     await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
-                     reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+                     reply_markup=get_menu_grid(user))
 
 # ==================== ЗАПУСК ====================
 async def handle_health(req): return web.Response(text="OK")
