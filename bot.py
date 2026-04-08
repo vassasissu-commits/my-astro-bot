@@ -4,7 +4,7 @@ import os
 import sqlite3
 import random
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery
@@ -30,11 +30,15 @@ class OnboardingState(StatesGroup):
     name = State()
     birth_date = State()
 
-class MagicBallState(StatesGroup):
-    waiting_question = State()
+class NatalState(StatesGroup):
+    time = State()
+    place = State()
 
-class CompatibilityState(StatesGroup):
-    waiting_partner_sign = State()
+class BallState(StatesGroup):
+    question = State()
+
+class CompatState(StatesGroup):
+    partner = State()
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -47,7 +51,7 @@ def init_db():
         zodiac TEXT,
         free_credits INTEGER DEFAULT 3,
         vedana_credits INTEGER DEFAULT 0,
-        last_reset_date DATE,
+        last_reset_date TEXT,
         is_premium INTEGER DEFAULT 0
     )''')
     conn.commit()
@@ -91,7 +95,7 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn.commit()
     conn.close()
 
-def use_credit(tid):
+def use_free_credit(tid):
     conn = sqlite3.connect(DB_NAME)
     conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
     conn.commit()
@@ -103,7 +107,7 @@ def use_vedana_credit(tid):
     conn.commit()
     conn.close()
 
-def add_credits(tid, free_amt, vedana_amt, set_prem=False):
+def add_credits(tid, free_amt=0, vedana_amt=0, set_prem=False):
     conn = sqlite3.connect(DB_NAME)
     if set_prem:
         conn.execute("UPDATE users SET is_premium=1, vedana_credits = vedana_credits + ? WHERE telegram_id=?", (vedana_amt, tid))
@@ -145,11 +149,13 @@ PROMPT_HOROSCOPE = """Ты профессиональный астролог с 
 💡 Совет
 Пиши конкретно. Длина: 150-250 слов."""
 
-PROMPT_NATAL = """Ты профессиональный астролог.
-Составь НАТАЛЬНУЮ КАРТУ для человека, родившегося {birth_date}.
+PROMPT_NATAL = """Ты профессиональный астролог-наталог.
+Составь НАТАЛЬНУЮ КАРТУ для:
+Дата: {birth_date}, Время: {time}, Место: {place}
 СТРУКТУРА:
 🌌 Натальная карта
-♈ Знак, Луна, Солнце
+♈ Асцендент и Солнечный знак
+🌙 Луна и эмоции
 💫 Ключевые аспекты
 🎯 Сильные стороны
 ⚠️ Зоны роста
@@ -165,8 +171,8 @@ PROMPT_COMPAT = """Ты астролог-эксперт по совместим�
 💡 Совет
 Длина: 150-200 слов."""
 
-PROMPT_MAGIC_BALL = """Ты — магический шар Веданы. Отвечай мистически, но конкретно.
-Вопрос: {question}
+PROMPT_BALL = """Ты — магический шар Веданы. Отвечай мистически, но конкретно.
+Вопрос: {q}
 Знак: {sign}
 Формат:
 🔮 Магический шар ответил:
@@ -183,7 +189,7 @@ PROMPT_WEEK = """Ты профессиональный астролог.
 💡 Совет
 Длина: 150-200 слов."""
 
-PROMPT_VEDANA_CONSULT = """
+PROMPT_VEDANA = """
 Ты — Ведана, мудрый астролог с 20-летним стажем. Ты видишь людей насквозь.
 ДАННЫЕ: Имя: {name}, Знак: {sign}, Дата: {birth_date}
 
@@ -222,6 +228,46 @@ TAROT_CARDS = [
     {"name": "Мир (XXI)", "desc": "Гармония."}
 ]
 
+# ==================== ТЕНЕВЫЕ ФРАЗЫ (ВОРОНКА) ====================
+SHADOWS = {
+    "horoscope": [
+        "🕯️ *Но есть аспект, который требует более глубокого изучения...*",
+        "✨ *Этот знак — лишь верхушка. Глубинный смысл раскроется в личной консультации.*",
+        "🔮 *Звёзды шепчут о важном. Хочешь узнать точную дату?*"
+    ],
+    "natal": [
+        "🌑 *Карта открыта, но судьба хранит ещё один секрет...*",
+        "✨ *Натальная карта показывает потенциал. Личная консультация Веданы активирует его.*"
+    ],
+    "tarot": [
+        "🔮 *Карта выпала не случайно. За ней скрывается послание именно для тебя...*",
+        "🕯️ *Расклад завершён, но вопрос остаётся открытым. Ведана знает ответ.*"
+    ],
+    "compat": [
+        "💕 *Совместимость рассчитана. Но как пройти через зоны риска? Ведана подскажет путь.*",
+        "✨ *Звёзды видят союз иначе. Личная консультация раскроет скрытые аспекты.*"
+    ],
+    "ball": [
+        "🔮 *Шар ответил, но эхо остаётся. Хочешь услышать его от самой Веданы?*",
+        "🌑 *Ответ получен. Следующий шаг требует мудрости опытного астролога.*"
+    ],
+    "week": [
+        "📅 *Неделя обещает перемены. Будь готов(а) к знакам...*",
+        "✨ *Прогноз составлен. Детали скрыты в личной консультации.*"
+    ],
+    "numerology": [
+        "🔢 *Число пути найдено. Но как его пройти без потерь?*",
+        "🕯️ *Нумерология открыла дверь. Ведана поможет войти.*"
+    ],
+    "mercury": [
+        "🪐 *Меркурий влияет на всех, но на тебя — особенно. Проверь личный прогноз.*",
+        "✨ *Ретроградность — время для внутренней работы. Ведана направит.*"
+    ]
+}
+
+def get_shadow(pred_type):
+    return "\n\n" + random.choice(SHADOWS.get(pred_type, ["🔮 *Звёзды видят больше...*"]))
+
 # ==================== КЛАВИАТУРЫ ====================
 def get_bottom_menu():
     return ReplyKeyboardMarkup(
@@ -232,27 +278,26 @@ def get_bottom_menu():
 
 def get_after_pred_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔮 Индивидуальное предсказание", callback_data="shop")],
+        [InlineKeyboardButton(text="🔮 Узнать, что скрыто", callback_data="shop")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
     ])
 
 def get_shop_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💫 5 прогнозов + 1 предсказание Веданы — 50 ⭐", callback_data="buy_5_1")],
-        [InlineKeyboardButton(text="🔥 15 прогнозов + 3 предсказания Веданы — 120 ⭐", callback_data="buy_15_3")],
-        [InlineKeyboardButton(text="💎 Безлимит + 6 предсказаний Веданы — 200 ⭐", callback_data="buy_inf_6")],
+        [InlineKeyboardButton(text="💫 5 прогнозов + 1 Веда — 50 ⭐", callback_data="buy_starter")],
+        [InlineKeyboardButton(text="🔥 15 прогнозов + 3 Веды — 120 ⭐", callback_data="buy_optimal")],
+        [InlineKeyboardButton(text="💎 Безлимит + 6 Вед — 200 ⭐", callback_data="buy_premium_pack")],
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
-def get_menu_grid(name, credits, vedana, is_prem):
-    timer = "✨ ∞ прогнозов" if is_prem else f"✨ Осталось: {credits}/3"
-    vedana_txt = f"🔮 Предсказаний Веданы: {vedana}" if not is_prem else "🔮 Предсказаний Веданы: ∞"
-    shop_btn = "💎 Магазин"
+def get_menu_grid(name, free_c, vedana_c, is_prem):
+    free_txt = "✨ ∞ прогнозов" if is_prem else f"✨ Осталось: {free_c}/3"
+    vedana_txt = f"🔮 Вед: {vedana_c}"
     
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"👋 {name}!", callback_data="noop")],
-        [InlineKeyboardButton(text=timer, callback_data="noop")],
-        [InlineKeyboardButton(text=vedana_txt, callback_data="noop")],
+        [InlineKeyboardButton(text=free_txt, callback_data="noop")],
+        [InlineKeyboardButton(text=vedana_txt, callback_data="shop")], # Кнопка баланса ведет в магазин если 0
         
         [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
@@ -260,13 +305,13 @@ def get_menu_grid(name, credits, vedana, is_prem):
         [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot"),
          InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
         
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="magic_ball"),
+        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
          InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
         
         [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
          InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
         
-        [InlineKeyboardButton(text=shop_btn, callback_data="shop")],
+        [InlineKeyboardButton(text="💎 Магазин", callback_data="shop")],
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
     ])
 
@@ -284,7 +329,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         try:
             photo = types.FSInputFile("vedana.jpg")
             await bot.send_photo(message.chat.id, photo, welcome, parse_mode="Markdown")
-        except:
+        except Exception as e:
+            logging.warning(f"Фото не найдено: {e}")
             await message.answer(welcome, parse_mode="Markdown")
         
         await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
@@ -313,7 +359,7 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
                         reply_markup=get_menu_grid(name, 3, 0, False))
     await state.clear()
 
-# ==================== ФУНКЦИИ ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 def calculate_zodiac(birth_date):
     try:
         date = datetime.strptime(birth_date, "%d.%m.%Y")
@@ -328,13 +374,13 @@ def calculate_zodiac(birth_date):
         return "♓ Рыбы"
     except: return "Не определён"
 
-def check_credits(user, msg):
+def check_free(user, msg):
     if not user['is_premium'] and user['free_credits'] <= 0:
-        msg.answer("❌ Прогнозы закончились. Пополни баланс в магазине!", reply_markup=get_bottom_menu())
+        msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!", reply_markup=get_bottom_menu())
         return False
     return True
 
-def send_pred_response(msg, text):
+def send_pred(msg, text):
     return msg.answer(text, parse_mode="Markdown", reply_markup=get_after_pred_kb())
 
 # ==================== ОБРАБОТЧИКИ ====================
@@ -354,90 +400,119 @@ async def main_menu_cb(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data == "shop")
 async def shop_cb(cb: types.CallbackQuery):
-    await cb.message.edit_text("✨ Выбери подходящий пакет:", reply_markup=get_shop_kb())
+    user = get_user(cb.from_user.id)
+    if not user:
+        await cb.answer("❌ Сначала /start", show_alert=True)
+        return
+    text = "✨ Что скрыто за твоим знаком?\n\nВедана может заглянуть глубже, если ты готов(а) к откровению.\n\n🔮 Индивидуальное предсказание включает:\n• Точные даты событий\n• Рекомендации по цвету/камню\n• Ответ на сокровенный вопрос\n• Послание наставников"
+    await cb.message.edit_text(text, reply_markup=get_shop_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "horoscope")
 async def horoscope(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
-    use_credit(cb.from_user.id)
+    if not user or not check_free(user, cb): return
+    use_free_credit(cb.from_user.id)
     await cb.message.answer("🌟 Составляю гороскоп...")
     prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
     ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
-    await send_pred_response(cb.message, ans)
+    await send_pred(cb.message, ans + get_shadow("horoscope"))
     await cb.answer()
 
 @dp.callback_query(F.data == "natal")
 async def natal(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
+    if not user or not check_free(user, cb): return
     await cb.message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
     await cb.answer()
     await dp.message.register(natal_time_handler, F.text)
 
 async def natal_time_handler(msg: types.Message, state: FSMContext):
-    await state.update_data(birth_time=msg.text.strip())
+    await state.update_data(time=msg.text.strip())
     await msg.answer("📍 Место рождения (Город):", reply_markup=get_bottom_menu())
-    await state.set_state(OnboardingState.birth_date) # Reuse state for simplicity
+    await state.set_state(NatalState.place)
 
-@dp.message(OnboardingState.birth_date)
+@dp.message(NatalState.place)
 async def natal_place_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_credits(user, msg): return
+    if not user or not check_free(user, msg): return
     data = await state.get_data()
     await msg.answer("🌌 Составляю карту...")
-    prompt = PROMPT_NATAL.format(birth_date=user['birth_date']) # Simplified for demo
+    prompt = PROMPT_NATAL.format(birth_date=user['birth_date'], time=data.get('time'), place=msg.text.strip())
     ans = await ask_groq(prompt, "Ты астролог-наталог.")
-    use_credit(msg.from_user.id)
-    await send_pred_response(msg, ans)
+    use_free_credit(msg.from_user.id)
+    await send_pred(msg, ans + get_shadow("natal"))
     await state.clear()
 
-@dp.callback_query(F.data == "magic_ball")
-async def magic_ball_menu(cb: types.CallbackQuery):
+@dp.callback_query(F.data == "ball")
+async def ball_menu(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
+    if not user or not check_free(user, cb): return
     await cb.message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
     await cb.answer()
-    await dp.message.register(magic_ball_handler, F.text)
+    await dp.message.register(ball_handler, F.text)
 
-async def magic_ball_handler(msg: types.Message, state: FSMContext):
+async def ball_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_credits(user, msg): return
+    if not user or not check_free(user, msg): return
     await msg.answer("🔮 Шар думает...")
-    prompt = PROMPT_MAGIC_BALL.format(question=msg.text, sign=user.get('zodiac',''))
+    prompt = PROMPT_BALL.format(q=msg.text, sign=user.get('zodiac',''))
     ans = await ask_groq(prompt, "Ты магический шар.")
-    use_credit(msg.from_user.id)
-    await send_pred_response(msg, ans)
+    use_free_credit(msg.from_user.id)
+    await send_pred(msg, ans + get_shadow("ball"))
     await state.clear()
 
 @dp.callback_query(F.data == "compat")
 async def compat_menu(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
+    if not user or not check_free(user, cb): return
     await cb.message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
     await cb.answer()
     await dp.message.register(compat_handler, F.text)
 
 async def compat_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_credits(user, msg): return
+    if not user or not check_free(user, msg): return
     await msg.answer("💕 Рассчитываю...")
     prompt = PROMPT_COMPAT.format(sign1=user['zodiac'], sign2=msg.text.strip())
     ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
-    use_credit(msg.from_user.id)
-    await send_pred_response(msg, ans)
+    use_free_credit(msg.from_user.id)
+    await send_pred(msg, ans + get_shadow("compat"))
     await state.clear()
 
 @dp.callback_query(F.data == "week")
 async def week_forecast(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
+    if not user or not check_free(user, cb): return
     await cb.message.answer("📅 Составляю прогноз...")
     prompt = PROMPT_WEEK.format(sign=user['zodiac'])
     ans = await ask_groq(prompt, "Ты профессиональный астролог.")
-    use_credit(cb.from_user.id)
-    await send_pred_response(cb.message, ans)
+    use_free_credit(cb.from_user.id)
+    await send_pred(cb.message, ans + get_shadow("week"))
+    await cb.answer()
+
+@dp.callback_query(F.data == "numerology")
+async def numerology(cb: types.CallbackQuery):
+    user = get_user(cb.from_user.id)
+    if not user or not check_free(user, cb): return
+    await cb.message.answer("🔢 Рассчитываю...")
+    prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
+    ans = await ask_groq(prompt, "Ты нумеролог.")
+    use_free_credit(cb.from_user.id)
+    await send_pred(cb.message, f"🔢 **Нумерология**\n\n{ans}" + get_shadow("numerology"))
+    await cb.answer()
+
+@dp.callback_query(F.data == "mercury")
+async def mercury(cb: types.CallbackQuery):
+    await cb.message.answer("🪐 Проверяю...")
+    ans = await ask_groq("Ретроградный Меркурий сейчас? Советы.", "Ты астролог.")
+    await send_pred(cb.message, f"🪐 **Меркурий**\n\n{ans}" + get_shadow("mercury"))
+    await cb.answer()
+
+@dp.callback_query(F.data == "tarot")
+async def tarot(cb: types.CallbackQuery):
+    card = random.choice(TAROT_CARDS)
+    await send_pred(cb.message, f"🃏 {card['name']}\n\n{card['desc']}" + get_shadow("tarot"))
     await cb.answer()
 
 @dp.callback_query(F.data == "vedana_pred")
@@ -446,41 +521,16 @@ async def vedana_pred(cb: types.CallbackQuery):
     if not user:
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
-    if not user['is_premium'] and user['vedana_credits'] <= 0:
-        await cb.message.answer("❌ Нет предсказаний Веданы. Пополни баланс в магазине!", reply_markup=get_shop_kb())
+    if user['vedana_credits'] <= 0:
+        await cb.message.answer("🔮 У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
         await cb.answer()
         return
     
-    await cb.message.answer("🔮 Ведана изучает вашу карту...")
-    prompt = PROMPT_VEDANA_CONSULT.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
+    await cb.message.answer("🕯️ Ведана изучает вашу карту...")
+    prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
     ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
-    if not user['is_premium']:
-        use_vedana_credit(cb.from_user.id)
-    await send_pred_response(cb.message, ans)
-    await cb.answer()
-
-@dp.callback_query(F.data == "tarot")
-async def tarot(cb: types.CallbackQuery):
-    card = random.choice(TAROT_CARDS)
-    await cb.message.answer(f"🃏 {card['name']}\n\n{card['desc']}", parse_mode="Markdown", reply_markup=get_after_pred_kb())
-    await cb.answer()
-
-@dp.callback_query(F.data == "mercury")
-async def mercury(cb: types.CallbackQuery):
-    await cb.message.answer("🪐 Проверяю...")
-    ans = await ask_groq("Ретроградный Меркурий сейчас? Советы.", "Ты астролог.")
-    await send_pred_response(cb.message, f"🪐 **Меркурий**\n\n{ans}")
-    await cb.answer()
-
-@dp.callback_query(F.data == "numerology")
-async def numerology(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_credits(user, cb): return
-    await cb.message.answer("🔢 Рассчитываю...")
-    prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
-    ans = await ask_groq(prompt, "Ты нумеролог.")
-    use_credit(cb.from_user.id)
-    await send_pred_response(cb.message, f"🔢 **Нумерология**\n\n{ans}")
+    use_vedana_credit(cb.from_user.id)
+    await send_pred(cb.message, ans)
     await cb.answer()
 
 @dp.callback_query(F.data == "edit")
@@ -503,18 +553,15 @@ async def save_edit(msg: types.Message, state: FSMContext):
 # ==================== ОПЛАТА ====================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
-    pack = cb.data
-    amounts = {"buy_5_1": 50, "buy_15_3": 120, "buy_inf_6": 200}
-    titles = {"buy_5_1": "Стартовый", "buy_15_3": "Оптимальный", "buy_inf_6": "Безлимит"}
-    
+    packs = {
+        "buy_starter": {"title": "Стартовый", "free": 5, "vedana": 1, "cost": 50},
+        "buy_optimal": {"title": "Оптимальный", "free": 15, "vedana": 3, "cost": 120},
+        "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
+    }
+    p = packs[cb.data]
     await bot.send_invoice(
-        chat_id=cb.from_user.id,
-        title=f"✨ {titles[pack]} пакет",
-        description=f"Активация через Telegram Stars",
-        payload=pack,
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="Пакет", amount=amounts[pack])]
+        chat_id=cb.from_user.id, title=f"✨ {p['title']}", description=f"Активация через Telegram Stars",
+        payload=cb.data, provider_token="", currency="XTR", prices=[LabeledPrice("Пакет", p['cost'])]
     )
     await cb.answer()
 
@@ -525,14 +572,14 @@ async def pre_checkout(q: PreCheckoutQuery):
 @dp.message(F.successful_payment)
 async def pay_success(msg: types.Message):
     payload = msg.successful_payment.invoice_payload
-    user = get_user(msg.from_user.id)
-    
-    if payload == "buy_5_1":
-        add_credits(msg.from_user.id, 5, 1)
-    elif payload == "buy_15_3":
-        add_credits(msg.from_user.id, 15, 3)
-    elif payload == "buy_inf_6":
-        add_credits(msg.from_user.id, 0, 6, set_prem=True)
+    packs = {
+        "buy_starter": {"free": 5, "vedana": 1},
+        "buy_optimal": {"free": 15, "vedana": 3},
+        "buy_premium_pack": {"free": 0, "vedana": 6, "prem": True}
+    }
+    p = packs.get(payload)
+    if p:
+        add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
         
     user = get_user(msg.from_user.id)
     await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
