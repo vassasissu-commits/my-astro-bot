@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
@@ -136,7 +136,7 @@ def log_event(tid, event, step=""):
     conn.commit()
     conn.close()
 
-# ================= GROQ AI (С кэшем) =================
+# ================= GROQ AI =================
 @lru_cache(maxsize=128)
 def hash_prompt(prompt, system_prompt):
     return hashlib.md5(f"{prompt}{system_prompt}".encode()).hexdigest()
@@ -312,7 +312,6 @@ def get_bottom_menu():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, is_persistent=False)
 
 def get_pred_action_kb(pred_type, has_vedana=False):
-    # Мягкий пейволл: inline-кнопка сразу под ответом
     text = "🔓 Полная консультация" if not has_vedana else "🔮 Перейти к Ведане"
     cb_data = "vedana_pred" if has_vedana else "shop"
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -321,7 +320,7 @@ def get_pred_action_kb(pred_type, has_vedana=False):
     ])
 
 def get_shop_kb(user):
-    # A/B тестирование текста кнопки
+    # A/B тестирование текста кнопок
     if user['ab_group'] == 'B':
         starter_text = "⚡ Быстрый старт — 50 ⭐"
         optimal_text = "🔥 Хит продаж — 120 ⭐"
@@ -345,7 +344,6 @@ def get_menu_grid_v2(user):
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     
-    # Прогресс-бар для бесплатных лимитов
     bar_len = 5
     filled = min(int(user['free_credits']) * bar_len // 3, bar_len) if not user['is_premium'] else bar_len
     progress = "█" * filled + "░" * (bar_len - filled)
@@ -365,15 +363,19 @@ def get_menu_grid_v2(user):
     ])
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
+# Восстановлено: загрузка MP4 и задержка 3-5 сек как в оригинале
+VEDANA_PHOTO = FSInputFile("vedana.jpg")
+LOADING_VIDEO = FSInputFile("loading.mp4")
+
 async def send_loading_video(message):
     try:
-        await message.answer("🌌 Звёзды складываются...", reply_markup=types.ForceReply(selective=False))
-        # В реальном проекте можно заменить на видео, но текст надёжнее для конверсии
-    except:
-        pass
+        await message.answer_video(LOADING_VIDEO, caption="🌌 Звёзды складываются...")
+    except Exception as e:
+        logging.warning(f"Не удалось отправить видео: {e}")
+        await message.answer("🌌 Ведана концентрируется...")
 
 async def delay_thinking():
-    await asyncio.sleep(random.uniform(2, 3.5))
+    await asyncio.sleep(random.uniform(3, 5))
 
 def calculate_zodiac(birth_date):
     try:
@@ -391,10 +393,11 @@ def calculate_zodiac(birth_date):
 
 async def send_pred(msg, text, pred_type, user):
     kb = get_pred_action_kb(pred_type, has_vedana=(user['vedana_credits'] > 0 or user['is_premium']))
+    full_text = text + get_shadow(pred_type)
     try:
-        await msg.edit_text(text + get_shadow(pred_type), reply_markup=kb, parse_mode="Markdown")
+        await msg.edit_text(full_text, reply_markup=kb, parse_mode="Markdown")
     except:
-        await msg.answer(text + get_shadow(pred_type), reply_markup=kb, parse_mode="Markdown")
+        await msg.answer(full_text, reply_markup=kb, parse_mode="Markdown")
     log_event(msg.from_user.id, "pred_shown", pred_type)
 
 # ================= ОНБОРДИНГ =================
@@ -406,10 +409,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
     user = get_user(message.from_user.id)
     if user and user.get('name'):
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
-        try: await message.answer_photo(photo="vedana.jpg", caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
+        try: await message.answer_photo(photo=VEDANA_PHOTO, caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
         except: await message.answer(caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
     else:
-        await message.answer("🌌 Я — Ведана.\nНапиши: имя, дату рождения (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮")
+        welcome = "🌌 Я — Ведана.\nНапиши: имя, дату рождения (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
+        try: await message.answer_photo(photo=VEDANA_PHOTO, caption=welcome, parse_mode="Markdown")
+        except: await message.answer(welcome, parse_mode="Markdown")
         await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
         await state.set_state(OnboardingState.name)
 
@@ -434,11 +439,11 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     log_event(message.from_user.id, "onboarding_complete", zodiac)
     
     caption = f"♐ Знак: {zodiac}\nВыбери раздел, {name}:"
-    try: await message.answer_photo(photo="vedana.jpg", caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
+    try: await message.answer_photo(photo=VEDANA_PHOTO, caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
     except: await message.answer(caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
     await state.clear()
 
-# ================= ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ (ИСПРАВЛЕНА АРХИТЕКТУРА) =================
+# ================= ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ =================
 @dp.callback_query(F.data == "noop")
 async def noop(cb: types.CallbackQuery): await cb.answer("ℹ️ Индикатор прогресса. Кредиты обновляются ежедневно.", show_alert=True)
 
@@ -448,11 +453,11 @@ async def main_menu_cb(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user: return
     caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
-    try: await cb.message.answer_photo(photo="vedana.jpg", caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
+    try: await cb.message.answer_photo(photo=VEDANA_PHOTO, caption=caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
     except: await cb.message.answer(caption, reply_markup=get_menu_grid_v2(user), parse_mode="Markdown")
     await cb.answer()
 
-# --- Магазин с персонализацией ---
+# --- Магазин ---
 @dp.callback_query(F.data == "shop")
 async def shop_cb(cb: types.CallbackQuery):
     log_event(cb.from_user.id, "nav_shop")
@@ -461,7 +466,6 @@ async def shop_cb(cb: types.CallbackQuery):
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
         
-    # Персонализированный оффер
     social_proof = random.randint(42, 87)
     urgency_text = f"🔥 Сегодня {social_proof} человек раскрыли свои карты." if user['ab_group'] == 'A' else "🕯️ Время действовать: звёзды меняют влияние через 48ч."
     
@@ -476,7 +480,7 @@ async def shop_cb(cb: types.CallbackQuery):
     except: await cb.message.answer(text, reply_markup=get_shop_kb(user))
     await cb.answer()
 
-# --- Предсказания (Единый шаблон с проверкой лимитов) ---
+# --- Предсказания (Единый шаблон) ---
 async def handle_prediction(cb: types.CallbackQuery, prompt, system_prompt, pred_type, requires_state=False):
     user = get_user(cb.from_user.id)
     if not user:
@@ -488,7 +492,7 @@ async def handle_prediction(cb: types.CallbackQuery, prompt, system_prompt, pred
         return
         
     use_free_credit(cb.from_user.id)
-    user['free_credits'] -= 1 # локальное обновление для UI
+    user['free_credits'] -= 1
     
     if requires_state:
         await cb.message.answer(f"Введите данные для {pred_type}:", reply_markup=get_bottom_menu())
@@ -501,14 +505,12 @@ async def handle_prediction(cb: types.CallbackQuery, prompt, system_prompt, pred
     await send_pred(cb.message, ans, pred_type, user)
     await cb.answer()
 
-# --- Гороскоп ---
 @dp.callback_query(F.data == "horoscope")
 async def horoscope(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
     await handle_prediction(cb, prompt, "Ты астролог с 20-летним опытом.", "horoscope")
 
-# --- Таро ---
 @dp.callback_query(F.data == "tarot")
 async def tarot(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
@@ -519,7 +521,6 @@ async def tarot(cb: types.CallbackQuery):
     await send_pred(cb.message, text, "tarot", user)
     await cb.answer()
 
-# --- Руны ---
 @dp.callback_query(F.data == "rune")
 async def rune_divination(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
@@ -527,21 +528,18 @@ async def rune_divination(cb: types.CallbackQuery):
     prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
     await handle_prediction(cb, prompt, "Ты эксперт по рунам.", "rune")
 
-# --- Нумерология ---
 @dp.callback_query(F.data == "numerology")
 async def numerology(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
     await handle_prediction(cb, prompt, "Ты нумеролог.", "numerology")
 
-# --- Неделя ---
 @dp.callback_query(F.data == "week")
 async def week_forecast(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     prompt = PROMPT_WEEK.format(sign=user['zodiac'])
     await handle_prediction(cb, prompt, "Ты профессиональный астролог.", "week")
 
-# --- Ведана ---
 @dp.callback_query(F.data == "vedana_pred")
 async def vedana_pred(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
@@ -565,7 +563,7 @@ async def vedana_pred(cb: types.CallbackQuery):
     except: await cb.message.answer(ans, reply_markup=kb, parse_mode="Markdown")
     await cb.answer()
 
-# --- Натальная карта (FSM) ---
+# --- FSM Обработчики ---
 @dp.callback_query(F.data == "natal")
 async def natal_start(cb: types.CallbackQuery, state: FSMContext):
     user = get_user(cb.from_user.id)
@@ -594,7 +592,6 @@ async def natal_place_handler(msg: types.Message, state: FSMContext):
     await send_pred(msg, ans, "natal", user)
     await state.clear()
 
-# --- Магический шар (FSM) ---
 @dp.callback_query(F.data == "ball")
 async def ball_start(cb: types.CallbackQuery, state: FSMContext):
     user = get_user(cb.from_user.id)
@@ -616,7 +613,6 @@ async def ball_handler(msg: types.Message, state: FSMContext):
     await send_pred(msg, ans, "ball", user)
     await state.clear()
 
-# --- Совместимость (FSM) ---
 @dp.callback_query(F.data == "compat")
 async def compat_start(cb: types.CallbackQuery, state: FSMContext):
     user = get_user(cb.from_user.id)
@@ -638,7 +634,6 @@ async def compat_handler(msg: types.Message, state: FSMContext):
     await send_pred(msg, ans, "compat", user)
     await state.clear()
 
-# --- Редактирование (FSM) ---
 @dp.callback_query(F.data == "edit")
 async def edit_start(cb: types.CallbackQuery, state: FSMContext):
     await state.set_state(EditState.new_birth_date)
@@ -658,7 +653,7 @@ async def save_edit(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
     await state.clear()
 
-# ================= ОПЛАТА =================
+# ================= ОПЛАТА (ИСПРАВЛЕНО) =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
     log_event(cb.from_user.id, "pay_init", cb.data)
@@ -668,16 +663,20 @@ async def buy_pack(cb: types.CallbackQuery):
         "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
     }
     p = packs[cb.data]
-    await bot.send_invoice(
-        chat_id=cb.from_user.id,
-        title=f"✨ {p['title']}",
-        description="Активация через Telegram Stars. Мгновенное пополнение.",
-        payload=cb.data,
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
-    )
-    await cb.answer()
+    try:
+        await bot.send_invoice(
+            chat_id=cb.from_user.id,
+            title=f"✨ {p['title']}",
+            description="Активация через Telegram Stars. Мгновенное пополнение.",
+            payload=cb.data,
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
+        )
+        await cb.answer()
+    except Exception as e:
+        logging.error(f"Ошибка выставления счета: {e}")
+        await cb.answer("⚠️ Ошибка оплаты. Попробуйте позже или напишите в поддержку.", show_alert=True)
 
 @dp.pre_checkout_query()
 async def pre_checkout(q: PreCheckoutQuery):
