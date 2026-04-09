@@ -4,7 +4,7 @@ import os
 import sqlite3
 import random
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
@@ -17,7 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("❌ Ошибка: Проверь переменные окружения")
+    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
     exit()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -54,7 +54,7 @@ def init_db():
         zodiac TEXT,
         free_credits INTEGER DEFAULT 3,
         vedana_credits INTEGER DEFAULT 0,
-        last_reset_date TEXT,
+        next_reset_time TIMESTAMP,
         is_premium INTEGER DEFAULT 0
     )''')
     conn.commit()
@@ -67,26 +67,28 @@ def get_user(tid):
     conn.close()
     if user:
         user = dict(user)
-        today = datetime.now().strftime("%Y-%m-%d")
-        if user['last_reset_date'] != today and not user['is_premium']:
+        now = datetime.now()
+        # Проверяем, пришло ли время сброса
+        if user['next_reset_time'] and datetime.fromisoformat(user['next_reset_time']) <= now and not user['is_premium']:
             conn = sqlite3.connect(DB_NAME)
-            conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
+            next_reset = (now + timedelta(hours=24)).isoformat()
+            conn.execute("UPDATE users SET free_credits=3, next_reset_time=? WHERE telegram_id=?", (next_reset, tid))
             conn.commit()
             conn.close()
             user['free_credits'] = 3
-            user['last_reset_date'] = today
+            user['next_reset_time'] = next_reset
         return user
     return None
 
 def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn = sqlite3.connect(DB_NAME)
-    today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     if not user:
+        next_reset = (datetime.now() + timedelta(hours=24)).isoformat()
         conn.execute("""INSERT INTO users 
-            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium) 
+            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, next_reset_time, is_premium) 
             VALUES (?, ?, ?, ?, 3, 0, ?, 0)""",
-            (tid, name, birth_date, zodiac, today))
+            (tid, name, birth_date, zodiac, next_reset))
     else:
         conn.execute("""UPDATE users SET 
             name=COALESCE(?, name), birth_date=COALESCE(?, birth_date), 
@@ -97,7 +99,8 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
 
 def use_free_credit(tid):
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
+    next_reset = (datetime.now() + timedelta(hours=24)).isoformat()
+    conn.execute("UPDATE users SET free_credits = free_credits - 1, next_reset_time=? WHERE telegram_id=?", (next_reset, tid))
     conn.commit()
     conn.close()
 
@@ -229,7 +232,7 @@ TAROT_CARDS = [
     {"name": "🃏 Шут (0)", "desc": "🌬️ Начало пути, чистый лист.\n\n✨ Ты стоишь на пороге нового цикла. Вселенная приглашает отпустить контроль и довериться потоку.\n💫 Сейчас не время для долгих раздумий. Спонтанность станет проводником.\n🕊️ Рискни там, где раньше боялся. Удача любит смелых."},
     {"name": "🎩 Маг (I)", "desc": "🔮 Сила воли и мастерство.\n\n✨ У тебя в руках все инструменты для успеха. Нужно лишь сфокусировать намерение.\n💫 Твои слова и мысли материализуются быстрее обычного.\n⚡ Действуй осознанно: ты создаёшь свою реальность прямо сейчас."},
     {"name": "📜 Жрица (II)", "desc": "🌙 Интуиция и тайны.\n\n✨ Ответы уже внутри тебя. Прислушайся к тихому голосу подсознания.\n💫 Сны и знаки будут особенно яркими в ближайшие дни.\n🤫 Не торопи события. Мудрость приходит в тишине."},
-    {"name": "👑 Императрица (III)", "desc": "🌿 Плодородие и изобилие.\n\n✨ Время творить, nurturing и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом, не требуя мгновенных результатов."},
+    {"name": "👑 Императрица (III)", "desc": "🌿 Плодородие и изобилие.\n\n✨ Время творить и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом."},
     {"name": "🏛️ Император (IV)", "desc": "⚖️ Власть и структура.\n\n✨ Нужна дисциплина и чёткий план. Хаос отступает перед порядком.\n💫 Возьми ответственность за свою жизнь в свои руки.\n🛡️ Установи границы: они защитят твою энергию."},
     {"name": "🔑 Иерофант (V)", "desc": "📖 Традиции и обучение.\n\n✨ Ищи наставника или обратись к проверенным знаниям.\n💫 Духовные практики и ритуалы принесут ясность.\n🤝 Объединение с единомышленниками усилит твой путь."},
     {"name": "💞 Влюбленные (VI)", "desc": "❤️ Выбор и любовь.\n\n✨ Перед тобой стоит важный выбор. Слушай сердце, но не игнорируй разум.\n💫 Гармония в отношениях возможна через честность.\n🦋 Принятие решения откроет новую дверь."},
@@ -301,11 +304,30 @@ def get_shop_kb():
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
+def get_timer_text(user):
+    if user['is_premium']:
+        return "✨ ∞ прогнозов"
+    if user['free_credits'] > 0:
+        return f"✨ Прогнозы: {user['free_credits']}/3"
+    # Кредиты закончились, показываем таймер
+    if user['next_reset_time']:
+        try:
+            reset_time = datetime.fromisoformat(user['next_reset_time'])
+            now = datetime.now()
+            if reset_time > now:
+                delta = reset_time - now
+                hours, remainder = divmod(int(delta.total_seconds()), 3600)
+                minutes, _ = divmod(remainder, 60)
+                return f"⏳ Следующие: {hours}ч {minutes}м"
+        except:
+            pass
+    return "✨ Прогнозы: 0/3"
+
 def get_menu_grid(user):
     name = user['name']
-    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
+    timer_text = get_timer_text(user)
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
@@ -320,7 +342,7 @@ def get_menu_grid(user):
         [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
          InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
          
-        [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
+        [InlineKeyboardButton(text=timer_text, callback_data="credits_info")],
         [InlineKeyboardButton(text=f"🔮 Индивидуальное предсказание от Веданы ({vedana_c})", callback_data=vedana_cb)],
         
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
@@ -353,7 +375,7 @@ def calculate_zodiac(birth_date):
 
 def check_free(user, msg):
     if not user['is_premium'] and user['free_credits'] <= 0:
-        msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!", reply_markup=get_bottom_menu())
+        msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!", reply_markup=get_shop_kb())
         return False
     return True
 
@@ -423,8 +445,20 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ================= ОБРАБОТЧИКИ =================
-@dp.callback_query(F.data == "noop")
-async def noop(cb: types.CallbackQuery): await cb.answer()
+@dp.callback_query(F.data == "credits_info")
+async def credits_info(cb: types.CallbackQuery):
+    user = get_user(cb.from_user.id)
+    if not user or user['is_premium']:
+        await cb.answer("У вас безлимитный доступ!", show_alert=True)
+        return
+    
+    if user['free_credits'] > 0:
+        await cb.answer(f"У вас {user['free_credits']} бесплатных прогнозов из 3", show_alert=True)
+    else:
+        # Показываем магазин
+        text = "✨ Прогнозы на сегодня закончились.\n\nПополните баланс, чтобы продолжить общение со звёздами:"
+        await cb.message.edit_text(text, reply_markup=get_shop_kb())
+        await cb.answer()
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_cb(cb: types.CallbackQuery):
@@ -459,7 +493,6 @@ async def horoscope(cb: types.CallbackQuery):
     use_free_credit(cb.from_user.id)
     await send_loading_video(cb.message)
     await delay_thinking()
-
     prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
     ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
     await send_pred(cb.message, ans + get_shadow("horoscope"))
@@ -485,7 +518,6 @@ async def natal_place_handler(msg: types.Message, state: FSMContext):
     data = await state.get_data()
     await send_loading_video(msg)
     await delay_thinking()
-
     prompt = PROMPT_NATAL.format(birth_date=user['birth_date'], time=data.get('time'), place=msg.text.strip())
     ans = await ask_groq(prompt, "Ты астролог-наталог.")
     use_free_credit(msg.from_user.id)
@@ -505,7 +537,6 @@ async def ball_handler(msg: types.Message, state: FSMContext):
     if not user or not check_free(user, msg): return
     await send_loading_video(msg)
     await delay_thinking()
-
     prompt = PROMPT_BALL.format(q=msg.text, sign=user.get('zodiac',''))
     ans = await ask_groq(prompt, "Ты магический шар.")
     use_free_credit(msg.from_user.id)
@@ -525,7 +556,6 @@ async def compat_handler(msg: types.Message, state: FSMContext):
     if not user or not check_free(user, msg): return
     await send_loading_video(msg)
     await delay_thinking()
-
     prompt = PROMPT_COMPAT.format(sign1=user['zodiac'], sign2=msg.text.strip())
     ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
     use_free_credit(msg.from_user.id)
@@ -538,7 +568,6 @@ async def week_forecast(cb: types.CallbackQuery):
     if not user or not check_free(user, cb): return
     await send_loading_video(cb.message)
     await delay_thinking()
-
     prompt = PROMPT_WEEK.format(sign=user['zodiac'])
     ans = await ask_groq(prompt, "Ты профессиональный астролог.")
     use_free_credit(cb.from_user.id)
@@ -551,7 +580,6 @@ async def numerology(cb: types.CallbackQuery):
     if not user or not check_free(user, cb): return
     await send_loading_video(cb.message)
     await delay_thinking()
-
     prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
     ans = await ask_groq(prompt, "Ты нумеролог.")
     use_free_credit(cb.from_user.id)
@@ -564,7 +592,6 @@ async def rune_divination(cb: types.CallbackQuery):
     if not user or not check_free(user, cb): return
     await send_loading_video(cb.message)
     await delay_thinking()
-
     rune = random.choice(RUNES)
     prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
     ans = await ask_groq(prompt, "Ты эксперт по рунам.")
@@ -579,7 +606,6 @@ async def tarot(cb: types.CallbackQuery):
     use_free_credit(cb.from_user.id)
     await send_loading_video(cb.message)
     await delay_thinking()
-
     card = random.choice(TAROT_CARDS)
     text = f"🔮 **Карты говорят...**\n\n{card['desc']}\n\n{get_shadow('tarot')}"
     await send_pred(cb.message, text)
@@ -592,12 +618,13 @@ async def vedana_pred(cb: types.CallbackQuery):
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
     if user['vedana_credits'] <= 0 and not user['is_premium']:
-        await cb.message.answer("🔮 У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
+        # Перенаправляем в магазин
+        text = "✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:"
+        await cb.message.edit_text(text, reply_markup=get_shop_kb())
         await cb.answer()
         return
     await send_loading_video(cb.message)
     await delay_thinking()
-
     prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
     ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
     if not user['is_premium']:
@@ -632,8 +659,13 @@ async def buy_pack(cb: types.CallbackQuery):
     }
     p = packs[cb.data]
     await bot.send_invoice(
-        chat_id=cb.from_user.id, title=f"✨ {p['title']}", description="Активация через Telegram Stars",
-        payload=cb.data, provider_token="", currency="XTR", prices=[LabeledPrice("Пакет", p['cost'])]
+        chat_id=cb.from_user.id, 
+        title=f"✨ {p['title']}", 
+        description="Активация через Telegram Stars",
+        payload=cb.data, 
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
     )
     await cb.answer()
 
@@ -663,13 +695,12 @@ async def invite_friend(cb: types.CallbackQuery):
     await cb.answer()
 
 # ================= ЗАПУСК =================
-async def handle_health(req): return web.Response(text="OK")
+async def handle_health(req): 
+    return web.Response(text="OK")
 
 async def start_web(port):
-    app = web.Application()
-    app.add_routes([web.get('/', handle_health)])
-    runner = web.AppRunner(app)
-    await runner.setup()
+    app = web.Application(); app.add_routes([web.get('/', handle_health)])
+    runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', port).start()
     logging.info(f"🌐 Server :{port}")
 
