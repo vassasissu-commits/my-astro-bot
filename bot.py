@@ -40,9 +40,6 @@ class BallState(StatesGroup):
 class CompatState(StatesGroup):
     partner = State()
 
-class RuneState(StatesGroup):
-    question = State()
-
 # ================= БАЗА ДАННЫХ =================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -200,46 +197,6 @@ PROMPT_VEDANA = """
 Тон: авторитетный, мягкий. Без общих фраз. 200-300 слов.
 """
 
-PROMPT_RUNE = """Ты — эксперт по древнескандинавским рунам.
-Вопрос: {q}
-Знак: {sign}
-Выбери 1-3 руны Старшего Футарка и дай трактовку.
-Формат:
-🔮 **Руны открылись:**
-[Название руны 1] - [значение]
-[Название руны 2] - [значение]
-💡 **Послание рун:** [2-3 предложения с советом]
-✨ **Действие:** [что сделать в ближайшие 3 дня]
-Длина: 150-250 слов."""
-
-# ================= РУНЫ =================
-RUNES = [
-    {"name": "Феху (Fehu)", "meaning": "Богатство, энергия, новый 시작"},
-    {"name": "Уруз (Uruz)", "meaning": "Сила, здоровье, мощь"},
-    {"name": "Турисаз (Thurisaz)", "meaning": "Защита, конфликт, прорыв"},
-    {"name": "Ансуз (Ansuz)", "meaning": "Мудрость, общение, знаки"},
-    {"name": "Райдо (Raido)", "meaning": "Путь, путешествие, движение"},
-    {"name": "Кеназ (Kenaz)", "meaning": "Огонь, творчество, озарение"},
-    {"name": "Гебо (Gebo)", "meaning": "Дар, партнёрство, баланс"},
-    {"name": "Вуньо (Wunjo)", "meaning": "Радость, успех, гармония"},
-    {"name": "Хагалаз (Hagalaz)", "meaning": "Разрушение, кризис, трансформация"},
-    {"name": "Наутиз (Nauthiz)", "meaning": "Нужда, терпение, урок"},
-    {"name": "Иса (Isa)", "meaning": "Лёд, остановка, застой"},
-    {"name": "Йера (Jera)", "meaning": "Урожай, цикл, результат"},
-    {"name": "Эйваз (Eihwaz)", "meaning": "Защита, выносливость, дерево"},
-    {"name": "Перт (Perthro)", "meaning": "Тайна, судьба, магия"},
-    {"name": "Альгиз (Algiz)", "meaning": "Защита, интуиция, связь"},
-    {"name": "Соулу (Sowilo)", "meaning": "Солнце, победа, энергия"},
-    {"name": "Тейваз (Tiwaz)", "meaning": "Воин, честь, справедливость"},
-    {"name": "Беркана (Berkana)", "meaning": "Рост, рождение, женственность"},
-    {"name": "Эваз (Ehwaz)", "meaning": "Движение, прогресс, доверие"},
-    {"name": "Манназ (Mannaz)", "meaning": "Человек, сознание, общество"},
-    {"name": "Лагуз (Laguz)", "meaning": "Вода, интуиция, поток"},
-    {"name": "Ингуз (Ingwaz)", "meaning": "Плодородие, завершение, потенциал"},
-    {"name": "Отал (Othala)", "meaning": "Наследие, дом, корни"},
-    {"name": "Дагаз (Dagaz)", "meaning": "День, прорыв, трансформация"}
-]
-
 # ================= ТАРО =================
 TAROT_CARDS = [
     {"name": "Шут (0)", "desc": "Начало пути, спонтанность. Рискни!"},
@@ -297,9 +254,9 @@ SHADOWS = {
         "🔢 Число пути найдено. Но как его пройти без потерь?",
         "🕯️ Нумерология открыла дверь. Ведана поможет войти."
     ],
-    "rune": [
-        "🔮 Руны показали путь. Но как пройти его? Ведана направит.",
-        "✨ Древние символы открылись. Их полная трактовка — в личной консультации."
+    "mercury": [
+        "🪐 Меркурий влияет на всех, но на тебя — особенно. Проверь личный прогноз.",
+        "✨ Ретроградность — время для внутренней работы. Ведана направит."
     ]
 }
 
@@ -329,11 +286,12 @@ def get_shop_kb():
     ])
 
 def get_menu_grid(name, free_c, vedana_c, is_prem):
-    free_txt = "✨ ∞ прогнозов" if is_prem else f"✨ Прогнозы: {free_c}/3"
-    vedana_txt = f"🔮 Индивидуальное предсказание от Веданы ({vedana_c})"
+    free_txt = "✨ ∞ прогнозов" if is_prem else f"✨ Осталось: {free_c}/3"
+    vedana_txt = f"🔮 Вед: {vedana_c}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"👋 {name}!", callback_data="noop")],
         [InlineKeyboardButton(text=free_txt, callback_data="noop")],
+        [InlineKeyboardButton(text=vedana_txt, callback_data="shop")],
         
         [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
@@ -342,13 +300,12 @@ def get_menu_grid(name, free_c, vedana_c, is_prem):
          InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
         
         [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
-         InlineKeyboardButton(text="🔮 Руны судьбы", callback_data="runes")],
+         InlineKeyboardButton(text="🪐 Ретро Меркурий", callback_data="mercury")],
         
         [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
          InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
         
         [InlineKeyboardButton(text="💎 Магазин", callback_data="shop")],
-        [InlineKeyboardButton(text=vedana_txt, callback_data="vedana_pred")],
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
     ])
 
@@ -361,13 +318,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await message.answer("🔮 Главное меню", 
                            reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
     else:
-        welcome = "🌌 **Я — Ведана.**\n\nЗвёзды готовы открыть свои тайны, {name}.".format(name=message.from_user.first_name or "путник")
-        # Отправляем фото (если есть файл vedana.jpg в репозитории)
+        welcome = "🌌 **Я — Ведана.**\n\nНапиши: **имя**, **дату рождения** (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
+        # Пробуем отправить фото, если есть
         try:
             photo = types.FSInputFile("vedana.jpg")
             await bot.send_photo(message.chat.id, photo, welcome, parse_mode="Markdown")
         except Exception as e:
-            logging.warning(f"Фото не найдено: {e}")
+            logging.warning(f"Фото vedana.jpg не найдено: {e}")
+            # Если фото нет, просто отправляем текст
             await message.answer(welcome, parse_mode="Markdown")
         
         await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
@@ -450,6 +408,7 @@ async def horoscope(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user or not check_free(user, cb): return
     use_free_credit(cb.from_user.id)
+    await cb.message.answer("🌟 Составляю гороскоп...")
     prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
     ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
     await send_pred(cb.message, ans + get_shadow("horoscope"))
@@ -473,6 +432,7 @@ async def natal_place_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
     if not user or not check_free(user, msg): return
     data = await state.get_data()
+    await msg.answer("🌌 Составляю карту...")
     prompt = PROMPT_NATAL.format(birth_date=user['birth_date'], time=data.get('time'), place=msg.text.strip())
     ans = await ask_groq(prompt, "Ты астролог-наталог.")
     use_free_credit(msg.from_user.id)
@@ -490,6 +450,7 @@ async def ball_menu(cb: types.CallbackQuery):
 async def ball_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
     if not user or not check_free(user, msg): return
+    await msg.answer("🔮 Шар думает...")
     prompt = PROMPT_BALL.format(q=msg.text, sign=user.get('zodiac',''))
     ans = await ask_groq(prompt, "Ты магический шар.")
     use_free_credit(msg.from_user.id)
@@ -507,6 +468,7 @@ async def compat_menu(cb: types.CallbackQuery):
 async def compat_handler(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
     if not user or not check_free(user, msg): return
+    await msg.answer("💕 Рассчитываю...")
     prompt = PROMPT_COMPAT.format(sign1=user['zodiac'], sign2=msg.text.strip())
     ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
     use_free_credit(msg.from_user.id)
@@ -517,6 +479,7 @@ async def compat_handler(msg: types.Message, state: FSMContext):
 async def week_forecast(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user or not check_free(user, cb): return
+    await cb.message.answer("📅 Составляю прогноз...")
     prompt = PROMPT_WEEK.format(sign=user['zodiac'])
     ans = await ask_groq(prompt, "Ты профессиональный астролог.")
     use_free_credit(cb.from_user.id)
@@ -527,39 +490,19 @@ async def week_forecast(cb: types.CallbackQuery):
 async def numerology(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if not user or not check_free(user, cb): return
+    await cb.message.answer("🔢 Рассчитываю...")
     prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
     ans = await ask_groq(prompt, "Ты нумеролог.")
     use_free_credit(cb.from_user.id)
     await send_pred(cb.message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
     await cb.answer()
 
-@dp.callback_query(F.data == "runes")
-async def runes_menu(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await cb.message.answer("🔮 Сосредоточься на вопросе и напиши его рунам:", reply_markup=get_bottom_menu())
+@dp.callback_query(F.data == "mercury")
+async def mercury(cb: types.CallbackQuery):
+    await cb.message.answer("🪐 Проверяю...")
+    ans = await ask_groq("Ретроградный Меркурий сейчас? Советы.", "Ты астролог.")
+    await send_pred(cb.message, f"🪐 Меркурий\n\n{ans}" + get_shadow("mercury"))
     await cb.answer()
-    await dp.message.register(rune_handler, F.text)
-
-async def rune_handler(msg: types.Message, state: FSMContext):
-    user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): return
-    
-    # Выбираем 1-3 случайные руны
-    num_runes = random.randint(1, 3)
-    selected_runes = random.sample(RUNES, num_runes)
-    
-    runes_text = "🔮 **Руны открылись:**\n\n"
-    for i, rune in enumerate(selected_runes, 1):
-        runes_text += f"**{i}. {rune['name']}**\n{rune['meaning']}\n\n"
-    
-    # AI интерпретация
-    prompt = PROMPT_RUNE.format(q=msg.text, sign=user.get('zodiac',''))
-    ai_interpretation = await ask_groq(prompt, "Ты эксперт по древнескандинавским рунам.")
-    
-    use_free_credit(msg.from_user.id)
-    await send_pred(msg, runes_text + ai_interpretation + get_shadow("rune"))
-    await state.clear()
 
 @dp.callback_query(F.data == "tarot")
 async def tarot(cb: types.CallbackQuery):
@@ -611,14 +554,14 @@ async def buy_pack(cb: types.CallbackQuery):
     }
     p = packs[cb.data]
     
-    # ИСПРАВЛЕНО: provider_token должен быть пустой строкой БЕЗ пробелов
+    # ИСПРАВЛЕНО: убраны все пробелы!
     await bot.send_invoice(
         chat_id=cb.from_user.id, 
         title=f"✨ {p['title']}", 
         description="Активация через Telegram Stars",
         payload=cb.data, 
-        provider_token="",  # ВАЖНО: пустая строка без пробелов!
-        currency="XTR",  # Telegram Stars
+        provider_token="",  # ← ПУСТАЯ СТРОКА (без пробелов!)
+        currency="XTR",      # ← БЕЗ пробела после XTR!
         prices=[LabeledPrice("Пакет", p['cost'])]
     )
     await cb.answer()
