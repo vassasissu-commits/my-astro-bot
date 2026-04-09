@@ -223,7 +223,7 @@ TAROT_CARDS = [
     {"name": "Мир (XXI)", "desc": "Гармония."}
 ]
 
-# ================= ТЕНЕВЫЕ ФРАЗЫ (ВОРОНКА) =================
+# ================= ТЕНЕВЫЕ ФРАЗЫ =================
 SHADOWS = {
     "horoscope": [
         "🕯️ Но есть аспект, который требует более глубокого изучения...",
@@ -319,13 +319,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
                            reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
     else:
         welcome = "🌌 **Я — Ведана.**\n\nНапиши: **имя**, **дату рождения** (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
-        # Пробуем отправить фото, если есть
         try:
             photo = types.FSInputFile("vedana.jpg")
             await bot.send_photo(message.chat.id, photo, welcome, parse_mode="Markdown")
         except Exception as e:
-            logging.warning(f"Фото vedana.jpg не найдено: {e}")
-            # Если фото нет, просто отправляем текст
+            logging.warning(f"Фото не найдено: {e}")
             await message.answer(welcome, parse_mode="Markdown")
         
         await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
@@ -547,56 +545,76 @@ async def save_edit(msg: types.Message, state: FSMContext):
 # ================= ОПЛАТА =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
-    packs = {
-        "buy_starter": {"title": "Стартовый", "free": 5, "vedana": 1, "cost": 50},
-        "buy_optimal": {"title": "Оптимальный", "free": 15, "vedana": 3, "cost": 120},
-        "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
-    }
-    p = packs[cb.data]
-    
-    # ИСПРАВЛЕНО: убраны все пробелы!
-    await bot.send_invoice(
-        chat_id=cb.from_user.id, 
-        title=f"✨ {p['title']}", 
-        description="Активация через Telegram Stars",
-        payload=cb.data, 
-        provider_token="",  # ← ПУСТАЯ СТРОКА (без пробелов!)
-        currency="XTR",      # ← БЕЗ пробела после XTR!
-        prices=[LabeledPrice("Пакет", p['cost'])]
-    )
-    await cb.answer()
+    try:
+        packs = {
+            "buy_starter": {"title": "Стартовый", "free": 5, "vedana": 1, "cost": 50},
+            "buy_optimal": {"title": "Оптимальный", "free": 15, "vedana": 3, "cost": 120},
+            "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
+        }
+        p = packs[cb.data]
+        
+        logging.info(f"💰 Создаю invoice: {p['title']} для {cb.from_user.id}")
+        
+        await bot.send_invoice(
+            chat_id=cb.from_user.id,
+            title=f"✨ {p['title']}",
+            description="Активация через Telegram Stars",
+            payload=cb.data,
+            provider_token="",  # ПУСТАЯ строка для Stars!
+            currency="XTR",
+            prices=[LabeledPrice(label="Пакет прогнозов", amount=p['cost'])],
+            need_name=False,
+            need_email=False,
+            need_phone=False,
+            need_shipping_address=False
+        )
+        
+        logging.info("✅ Invoice отправлен успешно")
+        await cb.answer()
+        
+    except Exception as e:
+        logging.error(f"❌ ОТПРАВКА INVOICE НЕ УДАЛАСЬ: {e}")
+        await cb.answer(f"Ошибка оплаты: {str(e)}", show_alert=True)
 
 @dp.pre_checkout_query()
 async def pre_checkout(q: PreCheckoutQuery):
+    logging.info(f"✅ Pre-checkout: {q.id}")
     await bot.answer_pre_checkout_query(q.id, ok=True)
 
 @dp.message(F.successful_payment)
 async def pay_success(msg: types.Message):
-    payload = msg.successful_payment.invoice_payload
-    packs = {
-        "buy_starter": {"free": 5, "vedana": 1},
-        "buy_optimal": {"free": 15, "vedana": 3},
-        "buy_premium_pack": {"free": 0, "vedana": 6, "prem": True}
-    }
-    p = packs.get(payload)
-    if p:
-        add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
-        user = get_user(msg.from_user.id)
-        await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
-                     reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+    try:
+        payload = msg.successful_payment.invoice_payload
+        packs = {
+            "buy_starter": {"free": 5, "vedana": 1},
+            "buy_optimal": {"free": 15, "vedana": 3},
+            "buy_premium_pack": {"free": 0, "vedana": 6, "prem": True}
+        }
+        p = packs.get(payload)
+        if p:
+            add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
+            user = get_user(msg.from_user.id)
+            logging.info(f"💎 ОПЛАТА УСПЕШНА: {payload} для {msg.from_user.id}")
+            await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
+                         reply_markup=get_menu_grid(user['name'], user['free_credits'], user['vedana_credits'], user['is_premium']))
+    except Exception as e:
+        logging.error(f"❌ Ошибка после оплаты: {e}")
 
 # ================= ЗАПУСК =================
-async def handle_health(req): return web.Response(text="OK")
+async def handle_health(req):
+    return web.Response(text="OK")
 
 async def start_web(port):
-    app = web.Application(); app.add_routes([web.get('/', handle_health)])
-    runner = web.AppRunner(app); await runner.setup()
+    app = web.Application()
+    app.add_routes([web.get('/', handle_health)])
+    runner = web.AppRunner(app)
+    await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', port).start()
     logging.info(f"🌐 Server :{port}")
 
 async def main():
     init_db()
-    logging.info("🚀 Запуск...")
+    logging.info("🚀 Запуск бота...")
     await start_web(int(os.getenv("PORT", 10000)))
     await dp.start_polling(bot)
 
