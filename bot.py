@@ -17,7 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
+    logging.error("❌ Ошибка: Проверь переменные окружения")
     exit()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -68,7 +68,6 @@ def get_user(tid):
     if user:
         user = dict(user)
         now = datetime.now()
-        # Проверяем, пришло ли время сброса
         if user['next_reset_time'] and datetime.fromisoformat(user['next_reset_time']) <= now and not user['is_premium']:
             conn = sqlite3.connect(DB_NAME)
             next_reset = (now + timedelta(hours=24)).isoformat()
@@ -232,7 +231,7 @@ TAROT_CARDS = [
     {"name": "🃏 Шут (0)", "desc": "🌬️ Начало пути, чистый лист.\n\n✨ Ты стоишь на пороге нового цикла. Вселенная приглашает отпустить контроль и довериться потоку.\n💫 Сейчас не время для долгих раздумий. Спонтанность станет проводником.\n🕊️ Рискни там, где раньше боялся. Удача любит смелых."},
     {"name": "🎩 Маг (I)", "desc": "🔮 Сила воли и мастерство.\n\n✨ У тебя в руках все инструменты для успеха. Нужно лишь сфокусировать намерение.\n💫 Твои слова и мысли материализуются быстрее обычного.\n⚡ Действуй осознанно: ты создаёшь свою реальность прямо сейчас."},
     {"name": "📜 Жрица (II)", "desc": "🌙 Интуиция и тайны.\n\n✨ Ответы уже внутри тебя. Прислушайся к тихому голосу подсознания.\n💫 Сны и знаки будут особенно яркими в ближайшие дни.\n🤫 Не торопи события. Мудрость приходит в тишине."},
-    {"name": "👑 Императрица (III)", "desc": "🌿 Плодородие и изобилие.\n\n✨ Время творить и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом."},
+    {"name": "👑 Императрица (III)", "desc": "🌿 Плодородие и изобилие.\n\n✨ Время творить, nurturing и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом, не требуя мгновенных результатов."},
     {"name": "🏛️ Император (IV)", "desc": "⚖️ Власть и структура.\n\n✨ Нужна дисциплина и чёткий план. Хаос отступает перед порядком.\n💫 Возьми ответственность за свою жизнь в свои руки.\n🛡️ Установи границы: они защитят твою энергию."},
     {"name": "🔑 Иерофант (V)", "desc": "📖 Традиции и обучение.\n\n✨ Ищи наставника или обратись к проверенным знаниям.\n💫 Духовные практики и ритуалы принесут ясность.\n🤝 Объединение с единомышленниками усилит твой путь."},
     {"name": "💞 Влюбленные (VI)", "desc": "❤️ Выбор и любовь.\n\n✨ Перед тобой стоит важный выбор. Слушай сердце, но не игнорируй разум.\n💫 Гармония в отношениях возможна через честность.\n🦋 Принятие решения откроет новую дверь."},
@@ -309,7 +308,6 @@ def get_timer_text(user):
         return "✨ ∞ прогнозов"
     if user['free_credits'] > 0:
         return f"✨ Прогнозы: {user['free_credits']}/3"
-    # Кредиты закончились, показываем таймер
     if user['next_reset_time']:
         try:
             reset_time = datetime.fromisoformat(user['next_reset_time'])
@@ -445,19 +443,28 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ================= ОБРАБОТЧИКИ =================
+@dp.callback_query(F.data == "noop")
+async def noop(cb: types.CallbackQuery): await cb.answer()
+
 @dp.callback_query(F.data == "credits_info")
 async def credits_info(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
-    if not user or user['is_premium']:
+    if not user:
+        await cb.answer("❌ Ошибка", show_alert=True)
+        return
+    
+    if user['is_premium']:
         await cb.answer("У вас безлимитный доступ!", show_alert=True)
         return
     
     if user['free_credits'] > 0:
         await cb.answer(f"У вас {user['free_credits']} бесплатных прогнозов из 3", show_alert=True)
     else:
-        # Показываем магазин
         text = "✨ Прогнозы на сегодня закончились.\n\nПополните баланс, чтобы продолжить общение со звёздами:"
-        await cb.message.edit_text(text, reply_markup=get_shop_kb())
+        try:
+            await cb.message.edit_text(text, reply_markup=get_shop_kb())
+        except:
+            await cb.message.answer(text, reply_markup=get_shop_kb())
         await cb.answer()
 
 @dp.callback_query(F.data == "main_menu")
@@ -483,7 +490,10 @@ async def shop_cb(cb: types.CallbackQuery):
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
     text = "✨ Что скрыто за твоим знаком?\n\nВедана может заглянуть глубже, если ты готов(а) к откровению.\n\n🔮 Индивидуальное предсказание включает:\n• Точные даты событий\n• Рекомендации по цвету/камню\n• Ответ на сокровенный вопрос\n• Послание наставников"
-    await cb.message.edit_text(text, reply_markup=get_shop_kb())
+    try:
+        await cb.message.edit_text(text, reply_markup=get_shop_kb())
+    except:
+        await cb.message.answer(text, reply_markup=get_shop_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "horoscope")
@@ -618,9 +628,11 @@ async def vedana_pred(cb: types.CallbackQuery):
         await cb.answer("❌ Сначала /start", show_alert=True)
         return
     if user['vedana_credits'] <= 0 and not user['is_premium']:
-        # Перенаправляем в магазин
         text = "✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:"
-        await cb.message.edit_text(text, reply_markup=get_shop_kb())
+        try:
+            await cb.message.edit_text(text, reply_markup=get_shop_kb())
+        except:
+            await cb.message.answer(text, reply_markup=get_shop_kb())
         await cb.answer()
         return
     await send_loading_video(cb.message)
