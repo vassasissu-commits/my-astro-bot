@@ -7,7 +7,10 @@ import aiohttp
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, 
+    KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
@@ -15,11 +18,17 @@ from aiohttp import web
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("❌ Ошибка: Проверь переменные окружения")
-    exit()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+if not BOT_TOKEN or not GROQ_API_KEY:
+    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
+    exit(1)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
@@ -64,6 +73,7 @@ def get_user(tid):
     conn.row_factory = sqlite3.Row
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     conn.close()
+    
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
@@ -81,15 +91,16 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn = sqlite3.connect(DB_NAME)
     today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
+    
     if not user:
         conn.execute("""INSERT INTO users 
             (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium)
-            VALUES (?, ?, ?, ?, 3, 0, ?, 0) """,
+            VALUES (?, ?, ?, ?, 3, 0, ?, 0)""",
             (tid, name, birth_date, zodiac, today))
     else:
         conn.execute("""UPDATE users SET 
             name=COALESCE(?, name), birth_date=COALESCE(?, birth_date),
-            zodiac=COALESCE(?, zodiac) WHERE telegram_id=? """,
+            zodiac=COALESCE(?, zodiac) WHERE telegram_id=?""",
             (name, birth_date, zodiac, tid))
     conn.commit()
     conn.close()
@@ -125,7 +136,10 @@ async def ask_groq(prompt, system_prompt):
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.1-8b-instant",
-                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
                     "max_tokens": 800,
                     "temperature": 0.7
                 }
@@ -324,7 +338,8 @@ async def send_loading_video(message):
     try:
         video = FSInputFile("loading.mp4")
         await message.answer_video(video, caption="🌌 Звёзды складываются...")
-    except:
+    except Exception as e:
+        logging.warning(f"Не удалось отправить видео: {e}")
         await message.answer("🌌 Ведана концентрируется...")
 
 async def delay_thinking():
@@ -334,377 +349,9 @@ def calculate_zodiac(birth_date):
     try:
         date = datetime.strptime(birth_date, "%d.%m.%Y")
         day, month = date.day, date.month
-        signs = [((3,21),(4,19), "♈ Овен"), ((4,20),(5,20), "♉ Телец"), ((5,21),(6,20), "♊ Близнецы"),
-                 ((6,21),(7,22), "♋ Рак"), ((7,23),(8,22), "♌ Лев"), ((8,23),(9,22), "♍ Дева"),
-                 ((9,23),(10,22), "♎ Весы"), ((10,23),(11,21), "♏ Скорпион"), ((11,22),(12,21), "♐ Стрелец"),
-                 ((12,22),(12,31), "♑ Козерог"), ((1,1),(1,19), "♑ Козерог"), ((1,20),(2,18), "♒ Водолей"),
-                 ((2,19),(3,20), "♓ Рыбы")]
-        for (m1,d1),(m2,d2),sign in signs:
-            if (month==m1 and day >=d1) or (month==m2 and day <=d2): return sign
-        return "♓ Рыбы"
-    except: return "Не определён"
-
-def check_free(user, msg):
-    if not user['is_premium'] and user['free_credits'] <= 0:
-        msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!", reply_markup=get_bottom_menu())
-        return False
-    return True
-
-def send_pred(msg, text):
-    return msg.answer(text, parse_mode="Markdown", reply_markup=get_after_pred_kb())
-
-# ================= ОНБОРДИНГ =================
-@dp.message(Command("start"))
-@dp.message(F.text == "/start")
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    user = get_user(message.from_user.id)
-    if user and user.get('name'):
-        caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
-        try:
-            await bot.send_photo(
-                chat_id=message.chat.id,
-                photo=FSInputFile("vedana.jpg"),
-                caption=caption,
-                reply_markup=get_menu_grid(user),
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logging.warning(f"Фото не найдено: {e}")
-            await message.answer(caption, reply_markup=get_menu_grid(user), parse_mode="Markdown")
-    else:
-        welcome = "🌌 Я — Ведана.\nНапиши: имя, дату рождения (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
-        try:
-            photo = FSInputFile("vedana.jpg")
-            await bot.send_photo(message.chat.id, photo, welcome, parse_mode="Markdown")
-        except:
-            await message.answer(welcome, parse_mode="Markdown")
-        await message.answer("✨ Как тебя зовут?", reply_markup=get_bottom_menu())
-        await state.set_state(OnboardingState.name)
-
-@dp.message(OnboardingState.name)
-async def onboarding_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text.strip())
-    await message.answer(f"✨ {message.text.strip()}!\n\n📅 Дата рождения (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
-    await state.set_state(OnboardingState.birth_date)
-
-@dp.message(OnboardingState.birth_date)
-async def onboarding_birthdate(message: types.Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text.strip(), "%d.%m.%Y")
-    except:
-        await message.answer("❌ Неверно. Формат: ДД.ММ.ГГГГ", reply_markup=get_bottom_menu())
-        return
-    data = await state.get_data()
-    name = data.get('name')
-    zodiac = calculate_zodiac(message.text.strip())
-    add_or_update_user(message.from_user.id, name, message.text.strip(), zodiac)
-    caption = f"♐ Знак: {zodiac}\nВыбери раздел, {name}:"
-    try:
-        await bot.send_photo(
-            chat_id=message.chat.id,
-            photo=FSInputFile("vedana.jpg"),
-            caption=caption,
-            reply_markup=get_menu_grid(get_user(message.from_user.id)),
-            parse_mode="Markdown"
-        )
-    except:
-        await message.answer(caption, reply_markup=get_menu_grid(get_user(message.from_user.id)), parse_mode="Markdown")
-    await state.clear()
-
-# ================= ОБРАБОТЧИКИ =================
-@dp.callback_query(F.data == "noop")
-async def noop(cb: types.CallbackQuery): await cb.answer()
-
-@dp.callback_query(F.data == "main_menu")
-async def main_menu_cb(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if user:
-        caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
-        try:
-            await cb.message.answer_photo(
-                photo=FSInputFile("vedana.jpg"),
-                caption=caption,
-                reply_markup=get_menu_grid(user),
-                parse_mode="Markdown"
-            )
-        except:
-            await cb.message.answer(caption, reply_markup=get_menu_grid(user), parse_mode="Markdown")
-    await cb.answer()
-
-@dp.callback_query(F.data == "shop")
-async def shop_cb(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user:
-        await cb.answer("❌ Сначала /start", show_alert=True)
-        return
-    text = "✨ Что скрыто за твоим знаком?\n\nВедана может заглянуть глубже, если ты готов(а) к откровению.\n\n🔮 Индивидуальное предсказание включает:\n• Точные даты событий\n• Рекомендации по цвету/камню\n• Ответ на сокровенный вопрос\n• Послание наставников"
-    try:
-        await cb.message.edit_text(text, reply_markup=get_shop_kb())
-    except:
-        await cb.message.answer(text, reply_markup=get_shop_kb())
-    await cb.answer()
-
-@dp.callback_query(F.data == "horoscope")
-async def horoscope(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    use_free_credit(cb.from_user.id)
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
-    ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
-    await send_pred(cb.message, ans + get_shadow("horoscope"))
-    await cb.answer()
-
-@dp.callback_query(F.data == "natal")
-async def natal(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await cb.message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
-    await cb.answer()
-    await dp.message.register(natal_time_handler, F.text)
-
-async def natal_time_handler(msg: types.Message, state: FSMContext):
-    await state.update_data(time=msg.text.strip())
-    await msg.answer("📍 Место рождения (Город):", reply_markup=get_bottom_menu())
-    await state.set_state(NatalState.place)
-
-@dp.message(NatalState.place)
-async def natal_place_handler(msg: types.Message, state: FSMContext):
-    user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): return
-    data = await state.get_data()
-    await send_loading_video(msg)
-    await delay_thinking()
-    prompt = PROMPT_NATAL.format(birth_date=user['birth_date'], time=data.get('time'), place=msg.text.strip())
-    ans = await ask_groq(prompt, "Ты астролог-наталог.")
-    use_free_credit(msg.from_user.id)
-    await send_pred(msg, ans + get_shadow("natal"))
-    await state.clear()
-
-@dp.callback_query(F.data == "ball")
-async def ball_menu(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await cb.message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
-    await cb.answer()
-    await dp.message.register(ball_handler, F.text)
-
-async def ball_handler(msg: types.Message, state: FSMContext):
-    user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): return
-    await send_loading_video(msg)
-    await delay_thinking()
-    prompt = PROMPT_BALL.format(q=msg.text, sign=user.get('zodiac',''))
-    ans = await ask_groq(prompt, "Ты магический шар.")
-    use_free_credit(msg.from_user.id)
-    await send_pred(msg, ans + get_shadow("ball"))
-    await state.clear()
-
-@dp.callback_query(F.data == "compat")
-async def compat_menu(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await cb.message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
-    await cb.answer()
-    await dp.message.register(compat_handler, F.text)
-
-async def compat_handler(msg: types.Message, state: FSMContext):
-    user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): return
-    await send_loading_video(msg)
-    await delay_thinking()
-    prompt = PROMPT_COMPAT.format(sign1=user['zodiac'], sign2=msg.text.strip())
-    ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
-    use_free_credit(msg.from_user.id)
-    await send_pred(msg, ans + get_shadow("compat"))
-    await state.clear()
-
-@dp.callback_query(F.data == "week")
-async def week_forecast(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    prompt = PROMPT_WEEK.format(sign=user['zodiac'])
-    ans = await ask_groq(prompt, "Ты профессиональный астролог.")
-    use_free_credit(cb.from_user.id)
-    await send_pred(cb.message, ans + get_shadow("week"))
-    await cb.answer()
-
-@dp.callback_query(F.data == "numerology")
-async def numerology(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
-    ans = await ask_groq(prompt, "Ты нумеролог.")
-    use_free_credit(cb.from_user.id)
-    await send_pred(cb.message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
-    await cb.answer()
-
-@dp.callback_query(F.data == "rune")
-async def rune_divination(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    rune = random.choice(RUNES)
-    prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
-    ans = await ask_groq(prompt, "Ты эксперт по рунам.")
-    use_free_credit(cb.from_user.id)
-    await send_pred(cb.message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
-    await cb.answer()
-
-@dp.callback_query(F.data == "tarot")
-async def tarot(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not check_free(user, cb): return
-    use_free_credit(cb.from_user.id)
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    card = random.choice(TAROT_CARDS)
-    text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
-    await send_pred(cb.message, text)
-    await cb.answer()
-
-@dp.callback_query(F.data == "vedana_pred")
-async def vedana_pred(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user:
-        await cb.answer("❌ Сначала /start", show_alert=True)
-        return
-    if user['vedana_credits'] <= 0 and not user['is_premium']:
-        text = "✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:"
-        try:
-            await cb.message.edit_text(text, reply_markup=get_shop_kb())
-        except:
-            await cb.message.answer(text, reply_markup=get_shop_kb())
-        await cb.answer()
-        return
-    await send_loading_video(cb.message)
-    await delay_thinking()
-    prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
-    ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
-    if not user['is_premium']:
-        use_vedana_credit(cb.from_user.id)
-    await send_pred(cb.message, ans)
-    await cb.answer()
-
-@dp.callback_query(F.data == "edit")
-async def edit(cb: types.CallbackQuery):
-    await cb.message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
-    await cb.answer()
-    await dp.message.register(save_edit, F.text)
-
-async def save_edit(msg: types.Message, state: FSMContext):
-    user = get_user(msg.from_user.id)
-    try:
-        datetime.strptime(msg.text.strip(), "%d.%m.%Y")
-        zodiac = calculate_zodiac(msg.text.strip())
-        add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
-        await msg.answer("✅ Обновлено!", reply_markup=get_menu_grid(user))
-    except:
-        await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
-    await state.clear()
-
-# ================= ОПЛАТА — ИСПРАВЛЕНО! =================
-@dp.callback_query(F.data.startswith("buy_"))
-async def buy_pack(cb: types.CallbackQuery):
-    logging.info(f"🛒 Попытка покупки: {cb.data} от пользователя {cb.from_user.id}")
-    packs = {
-        "buy_starter": {"title": "Стартовый", "free": 5, "vedana": 1, "cost": 50},
-        "buy_optimal": {"title": "Оптимальный", "free": 15, "vedana": 3, "cost": 120},
-        "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
-    }
-    p = packs[cb.data]
-    
-    try:
-        await bot.send_invoice(
-            chat_id=cb.from_user.id,
-            title=f"✨ {p['title']}",
-            description="Активация через Telegram Stars. Мгновенное пополнение баланса.",
-            payload=cb.data,
-            provider_token="",  # Пустой для Telegram Stars
-            currency="XTR",  # Telegram Stars
-            prices=[LabeledPrice(label="Пакет прогнозов", amount=p['cost'])],
-            need_name=False,
-            need_phone_number=False,
-            need_email=False,
-            need_shipping_address=False,
-            is_flexible=False
-        )
-        logging.info(f"✅ Инвойс создан для {cb.from_user.id}")
-        await cb.answer()
-    except Exception as e:
-        logging.error(f"❌ Ошибка создания инвойса: {e}")
-        await cb.answer(f"⚠️ Ошибка: {str(e)}", show_alert=True)
-
-@dp.pre_checkout_query()
-async def pre_checkout(q: PreCheckoutQuery):
-    logging.info(f"💳 Pre-checkout от {q.from_user.id}")
-    try:
-        await bot.answer_pre_checkout_query(q.id, ok=True)
-        logging.info(f"✅ Pre-checkout подтверждён для {q.from_user.id}")
-    except Exception as e:
-        logging.error(f"❌ Ошибка pre-checkout: {e}")
-        await bot.answer_pre_checkout_query(q.id, ok=False, error_message="Ошибка обработки платежа")
-
-@dp.message(F.successful_payment)
-async def pay_success(msg: types.Message):
-    logging.info(f"💰 Успешная оплата от {msg.from_user.id}")
-    payload = msg.successful_payment.invoice_payload
-    logging.info(f"📦 Payload: {payload}")
-    
-    packs = {
-        "buy_starter": {"free": 5, "vedana": 1},
-        "buy_optimal": {"free": 15, "vedana": 3},
-        "buy_premium_pack": {"free": 0, "vedana": 6, "prem": True}
-    }
-    p = packs.get(payload)
-    
-    if p:
-        try:
-            add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
-            user = get_user(msg.from_user.id)
-            logging.info(f"✅ Кредиты добавлены: {p}")
-            await msg.answer(
-                f"✅ Пакет активирован! Звёзды на твоей стороне.\n\n"
-                f"🎁 Добавлено:\n"
-                f"• {p.get('free', 0)} обычных прогнозов\n"
-                f"• {p.get('vedana', 0)} предсказаний от Веданы\n"
-                f"{'• ♾️ Безлимитный доступ' if p.get('prem') else ''}",
-                reply_markup=get_menu_grid(user)
-            )
-        except Exception as e:
-            logging.error(f"❌ Ошибка добавления кредитов: {e}")
-            await msg.answer("⚠️ Оплата прошла, но произошла ошибка активации. Напишите в поддержку.")
-
-@dp.callback_query(F.data == "invite")
-async def invite_friend(cb: types.CallbackQuery):
-    link = f"https://t.me/{(await bot.me()).username}?start=ref_{cb.from_user.id}"
-    await cb.message.answer(f"👥 Твоя ссылка:\n{link}\n\n🎁 За каждого друга ты получишь +5 бесплатных прогнозов!", reply_markup=get_bottom_menu())
-    await cb.answer()
-
-# ================= ЗАПУСК =================
-async def handle_health(req):
-    return web.Response(text="OK")
-
-async def start_web(port):
-    app = web.Application()
-    app.add_routes([web.get('/', handle_health)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', port).start()
-    logging.info(f"🌐 Server :{port}")
-
-async def main():
-    init_db()
-    logging.info("🚀 Запуск бота...")
-    await start_web(int(os.getenv("PORT", 10000)))
-    await dp.start_polling(bot, drop_pending_updates=True)
-
-if __name__ == "main":
-    asyncio.run(main())
+        signs = [
+            ((3,21),(4,19), "♈ Овен"), ((4,20),(5,20), "♉ Телец"), ((5,21),(6,20), "♊ Близнецы"),
+            ((6,21),(7,22), "♋ Рак"), ((7,23),(8,22), "♌ Лев"), ((8,23),(9,22), "♍ Дева"),
+            ((9,23),(10,22), "♎ Весы"), ((10,23),(11,21), "♏ Скорпион"), ((11,22),(12,21), "♐ Стрелец"),
+            ((12,22),(12,31), "♑ Козерог"), ((1,1),(1,19), "♑ Козерог"), ((1,20),(2,18), "♒ Водолей"),
+            ((2,19),(3,20
