@@ -15,12 +15,12 @@ from aiohttp import web
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PORT = int(os.getenv("PORT", 8080))
-ADMIN_USERNAME = "Rusfer1"  # Username админа без @
+PORT = int(os.getenv("PORT", 10000))
+ADMIN_USERNAME = "Rusfer1"  # Username админа
 
 if not BOT_TOKEN or not GROQ_API_KEY:
     logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
-    exit()
+    exit(1)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 bot = Bot(token=BOT_TOKEN)
@@ -41,9 +41,6 @@ class BallState(StatesGroup):
 
 class CompatState(StatesGroup):
     partner = State()
-
-class RuneState(StatesGroup):
-    question = State()
 
 # ================= БАЗА ДАННЫХ =================
 def init_db():
@@ -282,11 +279,7 @@ RUNES = [
 
 # ================= КЛАВИАТУРЫ =================
 def get_bottom_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="/start")]],
-        resize_keyboard=True,
-        is_persistent=False
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, is_persistent=False)
 
 def get_after_pred_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -303,7 +296,7 @@ def get_shop_kb():
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
-def get_menu_grid(user):
+def get_menu_grid(user, is_admin=False):
     name = user['name']
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
@@ -312,7 +305,7 @@ def get_menu_grid(user):
     # Исправлено: "вед" вместо "ведан"
     vedana_text = f"🔮 Индивидуальное предсказание от Веданы: {vedana_c} вед"
     
-    return InlineKeyboardMarkup(inline_keyboard=[
+    menu_kb = [
         [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
         [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot"),
@@ -324,14 +317,22 @@ def get_menu_grid(user):
         [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
-    ])
+    ]
+    
+    # Добавляем кнопку админа, если is_admin=True
+    if is_admin:
+        menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
+        
+    return InlineKeyboardMarkup(inline_keyboard=menu_kb)
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
     try:
+        # Исправлено: убраны лишние пробелы в имени файла
         video = FSInputFile("loading.mp4")
         await message.answer_video(video, caption="🌌 Звёзды складываются...")
-    except:
+    except Exception as e:
+        logging.warning(f"Не удалось отправить видео: {e}")
         await message.answer("🌌 Ведана концентрируется...")
 
 async def delay_thinking():
@@ -361,35 +362,29 @@ def send_pred(msg, text):
     return msg.answer(text, parse_mode="Markdown", reply_markup=get_after_pred_kb())
 
 # ================= ОНБОРДИНГ =================
-@dp.message(Command("start"))
+@dp.message(Command("start")) # Исправлено: убран пробел в команде
 @dp.message(F.text == "/start")
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
     
-    # Кнопка админа
-    kb = get_menu_grid(user)
-    if user['telegram_id'] is not None:
-        me = await bot.get_me()
-        # Проверка: если юзернейм совпадает с админом, добавляем кнопку
-        # Note: message.from_user.username может быть None, но мы предполагаем Rusfer1
-        # В callback_query это надежнее, но здесь просто добавим если совпало
-        if message.from_user.username == ADMIN_USERNAME:
-            kb.inline_keyboard.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
+    # Проверяем, админ ли это
+    is_admin = (message.from_user.username == ADMIN_USERNAME)
 
     if user and user.get('name'):
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
         try:
+            # Исправлено: убраны пробелы в имени файла
             await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=FSInputFile("vedana.jpg"),
                 caption=caption,
-                reply_markup=kb,
+                reply_markup=get_menu_grid(user, is_admin),
                 parse_mode="Markdown"
             )
         except Exception as e:
             logging.warning(f"Фото не найдено: {e}")
-            await message.answer(caption, reply_markup=kb, parse_mode="Markdown")
+            await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     else:
         welcome = "🌌 Я — Ведана.\nНапиши: имя, дату рождения (ДД.ММ.ГГГГ).\nКарты откроют тайны… 🔮"
         try:
@@ -438,21 +433,18 @@ async def noop(cb: types.CallbackQuery): await cb.answer()
 async def main_menu_cb(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if user:
+        # Проверяем, админ ли это
+        is_admin = (cb.from_user.username == ADMIN_USERNAME)
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
-        kb = get_menu_grid(user)
-        # Добавляем кнопку админа в главное меню
-        if cb.from_user.username == ADMIN_USERNAME:
-            kb.inline_keyboard.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
-            
         try:
             await cb.message.answer_photo(
                 photo=FSInputFile("vedana.jpg"),
                 caption=caption,
-                reply_markup=kb,
+                reply_markup=get_menu_grid(user, is_admin),
                 parse_mode="Markdown"
             )
         except:
-            await cb.message.answer(caption, reply_markup=kb, parse_mode="Markdown")
+            await cb.message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     await cb.answer()
 
 @dp.callback_query(F.data == "shop")
@@ -633,14 +625,13 @@ async def save_edit(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
     await state.clear()
 
-# ================= АДМИН ПАНЕЛЬ (ИСПРАВЛЕНО) =================
+# ================= АДМИН ПАНЕЛЬ =================
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(cb: types.CallbackQuery):
     if cb.from_user.username != ADMIN_USERNAME:
         await cb.answer("🔒 Доступ запрещён", show_alert=True)
         return
     
-    # Используем answer, чтобы отправить новое сообщение, так как предыдущее — это фото
     user = get_user(cb.from_user.id)
     text = (f"⚙️ Админ-панель (@{ADMIN_USERNAME})\n\n"
             f"👤 Ваш баланс:\n"
@@ -715,18 +706,15 @@ async def buy_pack(cb: types.CallbackQuery):
         "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
     }
     p = packs[cb.data]
-    try:
-        await bot.send_invoice(
-            chat_id=cb.from_user.id,
-            title=f"✨ {p['title']}",
-            description="Активация через Telegram Stars",
-            payload=cb.data,
-            provider_token="",
-            currency="XTR",
-            prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
-        )
-    except Exception as e:
-        await cb.answer(f"Ошибка: {e}", show_alert=True)
+    await bot.send_invoice(
+        chat_id=cb.from_user.id,
+        title=f"✨ {p['title']}",
+        description="Активация через Telegram Stars",
+        payload=cb.data,
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
+    )
     await cb.answer()
 
 @dp.pre_checkout_query()
@@ -745,7 +733,7 @@ async def pay_success(msg: types.Message):
     if p:
         add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
         user = get_user(msg.from_user.id)
-        await msg.answer(f"✅ Пакет активирован! Начислено {p.get('vedana', 0)} вед.", 
+        await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
                          reply_markup=get_menu_grid(user))
 
 @dp.callback_query(F.data == "invite")
@@ -770,7 +758,7 @@ async def main():
     init_db()
     logging.info("🚀 Запуск...")
     
-    # 🔧 Исправление ошибки Conflict (Webhook vs Polling)
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Удаляем webhook, если он остался от прошлого запуска
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         logging.info("✅ Webhook удалён, запускаем polling")
@@ -780,6 +768,6 @@ async def main():
     await start_web(int(os.getenv("PORT", 10000)))
     await dp.start_polling(bot, drop_pending_updates=True)
 
-# 🔧 Исправление if name == "main" -> if __name__ == "__main__"
+# Исправлено: __name__ == "__main__"
 if __name__ == "__main__":
     asyncio.run(main())
