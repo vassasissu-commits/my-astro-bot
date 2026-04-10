@@ -8,27 +8,25 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, 
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup,
     KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://my-astro-bot-wqwl.onrender.com/webhook")
+PORT = int(os.getenv("PORT", 8080))
 
 if not BOT_TOKEN or not GROQ_API_KEY:
     logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
     exit(1)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
@@ -47,9 +45,6 @@ class BallState(StatesGroup):
 
 class CompatState(StatesGroup):
     partner = State()
-
-class RuneState(StatesGroup):
-    question = State()
 
 # ================= БАЗА ДАННЫХ =================
 def init_db():
@@ -73,7 +68,6 @@ def get_user(tid):
     conn.row_factory = sqlite3.Row
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     conn.close()
-    
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
@@ -91,7 +85,6 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn = sqlite3.connect(DB_NAME)
     today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
-    
     if not user:
         conn.execute("""INSERT INTO users 
             (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium)
@@ -338,8 +331,7 @@ async def send_loading_video(message):
     try:
         video = FSInputFile("loading.mp4")
         await message.answer_video(video, caption="🌌 Звёзды складываются...")
-    except Exception as e:
-        logging.warning(f"Не удалось отправить видео: {e}")
+    except:
         await message.answer("🌌 Ведана концентрируется...")
 
 async def delay_thinking():
@@ -378,7 +370,6 @@ def send_pred(msg, text):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    
     if user and user.get('name'):
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
         try:
@@ -485,12 +476,10 @@ async def natal(cb: types.CallbackQuery):
     use_free_credit(cb.from_user.id)
     await cb.message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
     await cb.answer()
-    # Регистрируем обработчик временно
     async def natal_time_handler(msg: types.Message, state: FSMContext):
         await state.update_data(time=msg.text.strip())
         await msg.answer("📍 Место рождения (Город):", reply_markup=get_bottom_menu())
         await state.set_state(NatalState.place)
-    
     @dp.message(NatalState.place, F.text)
     async def natal_place_handler(msg: types.Message, state: FSMContext):
         user = get_user(msg.from_user.id)
@@ -502,10 +491,6 @@ async def natal(cb: types.CallbackQuery):
         ans = await ask_groq(prompt, "Ты астролог-наталог.")
         await send_pred(msg, ans + get_shadow("natal"))
         await state.clear()
-        # Убираем временные хендлеры
-        dp.message.unregister(natal_time_handler)
-        dp.message.unregister(natal_place_handler)
-    
     dp.message.register(natal_time_handler, NatalState.time, F.text)
 
 @dp.callback_query(F.data == "ball")
@@ -515,7 +500,6 @@ async def ball_menu(cb: types.CallbackQuery):
     use_free_credit(cb.from_user.id)
     await cb.message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
     await cb.answer()
-    
     async def ball_handler(msg: types.Message, state: FSMContext):
         user = get_user(msg.from_user.id)
         if not user or not check_free(user, msg): return
@@ -525,8 +509,6 @@ async def ball_menu(cb: types.CallbackQuery):
         ans = await ask_groq(prompt, "Ты магический шар.")
         await send_pred(msg, ans + get_shadow("ball"))
         await state.clear()
-        dp.message.unregister(ball_handler)
-    
     dp.message.register(ball_handler, BallState.question, F.text)
 
 @dp.callback_query(F.data == "compat")
@@ -536,7 +518,6 @@ async def compat_menu(cb: types.CallbackQuery):
     use_free_credit(cb.from_user.id)
     await cb.message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
     await cb.answer()
-    
     async def compat_handler(msg: types.Message, state: FSMContext):
         user = get_user(msg.from_user.id)
         if not user or not check_free(user, msg): return
@@ -546,8 +527,6 @@ async def compat_menu(cb: types.CallbackQuery):
         ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
         await send_pred(msg, ans + get_shadow("compat"))
         await state.clear()
-        dp.message.unregister(compat_handler)
-    
     dp.message.register(compat_handler, CompatState.partner, F.text)
 
 @dp.callback_query(F.data == "week")
@@ -626,7 +605,6 @@ async def vedana_pred(cb: types.CallbackQuery):
 async def edit(cb: types.CallbackQuery):
     await cb.message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
     await cb.answer()
-    
     async def save_edit(msg: types.Message, state: FSMContext):
         user = get_user(msg.from_user.id)
         try:
@@ -637,11 +615,9 @@ async def edit(cb: types.CallbackQuery):
         except:
             await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
         await state.clear()
-        dp.message.unregister(save_edit)
-    
     dp.message.register(save_edit, EditState.new_birth_date, F.text)
 
-# ================= ОПЛАТА — ИСПРАВЛЕНО! =================
+# ================= ОПЛАТА =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
     logging.info(f"🛒 Попытка покупки: {cb.data} от {cb.from_user.id}")
@@ -651,7 +627,6 @@ async def buy_pack(cb: types.CallbackQuery):
         "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
     }
     p = packs[cb.data]
-    
     try:
         await bot.send_invoice(
             chat_id=cb.from_user.id,
@@ -713,35 +688,51 @@ async def invite_friend(cb: types.CallbackQuery):
     await cb.message.answer(f"👥 Твоя ссылка:\n{link}\n\n🎁 За каждого друга +5 прогнозов!", reply_markup=get_bottom_menu())
     await cb.answer()
 
-# ================= ЗАПУСК =================
-async def handle_health(req):
-    return web.Response(text="OK")
+# ================= ЗАПУСК С ВЕБХУКОМ =================
+async def on_startup(bot: Bot):
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        allowed_updates=dp.resolve_used_update_types(),
+        drop_pending_updates=True
+    )
+    logging.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
-async def start_web(port):
-    app = web.Application()
-    app.add_routes([web.get("/", handle_health), web.get("/health", handle_health)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logging.info(f"🌐 Health endpoint: http://0.0.0.0:{port}/health")
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    logging.info("✅ Webhook удалён")
 
 async def main():
     init_db()
-    port = int(os.getenv("PORT", 8080))
-    logging.info(f"🚀 Запуск бота на порту {port}...")
     
-    # Запускаем веб-сервер для health checks
-    await start_web(port)
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
     
-    # Запускаем polling с отключением старых обновлений
-    await dp.start_polling(bot, drop_pending_updates=True)
+    app = web.Application()
+    
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path="/webhook")
+    
+    async def health_handler(request):
+        return web.Response(text="OK")
+    app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
+    
+    setup_application(app, dp, bot=bot)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    
+    logging.info(f"🚀 Бот запущен на порту {PORT}")
+    logging.info(f"🔗 Webhook: {WEBHOOK_URL}")
+    
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("🛑 Бот остановлен пользователем")
+        logging.info("🛑 Бот остановлен")
     except Exception as e:
         logging.error(f"❌ Критическая ошибка: {e}")
         raise
