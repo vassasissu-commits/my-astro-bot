@@ -11,14 +11,16 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# Render обычно назначает порт сам, но лучше явно указать 8080 или брать из env
-PORT = int(os.getenv("PORT", 8080)) 
+PORT = int(os.getenv("PORT", 8080))
 ADMIN_USERNAME = "Rusfer1"
+# ВАЖНО: Замените my-astro-bot-wqwl.onrender.com на ваш реальный URL из настроек Render
+WEBHOOK_URL = f"https://my-astro-bot-wqwl.onrender.com/webhook"
 
 if not BOT_TOKEN or not GROQ_API_KEY:
     logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
@@ -28,9 +30,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
-
-# Глобальное событие для остановки
-stop_event = asyncio.Event()
 
 # ================= FSM =================
 class OnboardingState(StatesGroup):
@@ -741,59 +740,57 @@ async def invite_friend(cb: types.CallbackQuery):
     await cb.message.answer(f"👥 Твоя ссылка:\n{link}\n\n🎁 За каждого друга ты получишь +5 бесплатных прогнозов!", reply_markup=get_bottom_menu())
     await cb.answer()
 
-# ================= ЗАПУСК И СТАБИЛЬНОСТЬ =================
-async def handle_health(req):
-    return web.Response(text="OK")
+# ================= ЗАПУСК С WEBHOOKS =================
+async def on_startup(bot: Bot):
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        allowed_updates=dp.resolve_used_update_types(),
+        drop_pending_updates=True
+    )
+    logging.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
-async def start_web(port):
-    app = web.Application()
-    app.add_routes([web.get('/', handle_health)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logging.info(f"🌐 Server :{port}")
-
-def handle_sigterm(signum, frame):
-    logging.info("Received SIGTERM. Shutting down gracefully...")
-    stop_event.set()
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    logging.info("✅ Webhook удалён")
 
 async def main():
-    # Обработка сигналов завершения (SIGTERM) от Render
-    loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGTERM, handle_sigterm, signal.SIGTERM, None)
-    
     init_db()
-    logging.info("🚀 Запуск...")
     
-    # Удаляем webhook, если он остался
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        logging.info("✅ Webhook удалён")
-    except Exception as e:
-        logging.warning(f"⚠️ Не удалось удалить webhook: {e}")
-        
-    # Задержка перед стартом, чтобы старый процесс точно умер (решает Conflict)
-    logging.info("⏳ Waiting 2 seconds to avoid conflict...")
-    await asyncio.sleep(2)
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
     
-    await start_web(PORT)
+    app = web.Application()
     
-    # Запускаем polling в фоне
-    polling_task = asyncio.create_task(dp.start_polling(bot, drop_pending_updates=True))
+    # Настраиваем обработчик вебхука
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+    )
+    webhook_requests_handler.register(app, path="/webhook")
     
-    # Ждем сигнала остановки
-    await stop_event.wait()
+    # Health check для Render
+    async def health_handler(request):
+        return web.Response(text="OK")
+    app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
     
-    # Корректное завершение
-    logging.info("Stopping polling...")
-    await dp.stop_polling()
-    logging.info("Bot stopped.")
+    # Подключаем приложение к dispatcher
+    setup_application(app, dp, bot=bot)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    
+    logging.info(f"🚀 Бот запущен на порту {PORT} с Webhooks")
+    logging.info(f"🔗 Webhook URL: {WEBHOOK_URL}")
+    
+    # Держим сервер запущенным
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Bot stopped by user.")
+        logging.info("🛑 Бот остановлен")
     except Exception as e:
-        logging.error(f"Critical error: {e}")
+        logging.error(f"❌ Критическая ошибка: {e}")
