@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import signal
 import sqlite3
 import random
 import aiohttp
@@ -16,7 +17,7 @@ from aiohttp import web
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 10000))
-ADMIN_USERNAME = "Rusfer1"  # Username админа
+ADMIN_USERNAME = "Rusfer1"
 
 if not BOT_TOKEN or not GROQ_API_KEY:
     logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
@@ -26,6 +27,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
+
+# Глобальная переменная для остановки бота
+stop_event = asyncio.Event()
 
 # ================= FSM =================
 class OnboardingState(StatesGroup):
@@ -319,7 +323,6 @@ def get_menu_grid(user, is_admin=False):
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
     ]
     
-    # Добавляем кнопку админа, если is_admin=True
     if is_admin:
         menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
         
@@ -328,7 +331,6 @@ def get_menu_grid(user, is_admin=False):
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
     try:
-        # Исправлено: убраны лишние пробелы в имени файла
         video = FSInputFile("loading.mp4")
         await message.answer_video(video, caption="🌌 Звёзды складываются...")
     except Exception as e:
@@ -362,19 +364,16 @@ def send_pred(msg, text):
     return msg.answer(text, parse_mode="Markdown", reply_markup=get_after_pred_kb())
 
 # ================= ОНБОРДИНГ =================
-@dp.message(Command("start")) # Исправлено: убран пробел в команде
+@dp.message(Command("start"))
 @dp.message(F.text == "/start")
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    
-    # Проверяем, админ ли это
     is_admin = (message.from_user.username == ADMIN_USERNAME)
 
     if user and user.get('name'):
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
         try:
-            # Исправлено: убраны пробелы в имени файла
             await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=FSInputFile("vedana.jpg"),
@@ -433,7 +432,6 @@ async def noop(cb: types.CallbackQuery): await cb.answer()
 async def main_menu_cb(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if user:
-        # Проверяем, админ ли это
         is_admin = (cb.from_user.username == ADMIN_USERNAME)
         caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
         try:
@@ -742,7 +740,7 @@ async def invite_friend(cb: types.CallbackQuery):
     await cb.message.answer(f"👥 Твоя ссылка:\n{link}\n\n🎁 За каждого друга ты получишь +5 бесплатных прогнозов!", reply_markup=get_bottom_menu())
     await cb.answer()
 
-# ================= ЗАПУСК =================
+# ================= ЗАПУСК И СТАБИЛЬНОСТЬ =================
 async def handle_health(req):
     return web.Response(text="OK")
 
@@ -751,23 +749,46 @@ async def start_web(port):
     app.add_routes([web.get('/', handle_health)])
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', port).start()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
     logging.info(f"🌐 Server :{port}")
 
+def handle_sigterm(signum, frame):
+    logging.info("Received SIGTERM. Shutting down gracefully...")
+    stop_event.set()
+
 async def main():
+    # Обработка сигналов завершения (SIGTERM) от Render
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, handle_sigterm, signal.SIGTERM, None)
+    
     init_db()
     logging.info("🚀 Запуск...")
     
-    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Удаляем webhook, если он остался от прошлого запуска
+    # Удаляем webhook, если он остался
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logging.info("✅ Webhook удалён, запускаем polling")
+        logging.info("✅ Webhook удалён")
     except Exception as e:
         logging.warning(f"⚠️ Не удалось удалить webhook: {e}")
         
     await start_web(int(os.getenv("PORT", 10000)))
-    await dp.start_polling(bot, drop_pending_updates=True)
+    
+    # Запускаем polling в фоне, чтобы мы могли ловить сигналы
+    polling_task = asyncio.create_task(dp.start_polling(bot, drop_pending_updates=True))
+    
+    # Ждем сигнала остановки
+    await stop_event.wait()
+    
+    # Корректное завершение
+    logging.info("Stopping polling...")
+    await dp.stop_polling()
+    logging.info("Bot stopped.")
 
-# Исправлено: __name__ == "__main__"
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
+    except Exception as e:
+        logging.error(f"Critical error: {e}")
