@@ -16,7 +16,8 @@ from aiohttp import web
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PORT = int(os.getenv("PORT", 10000))
+# Render обычно назначает порт сам, но лучше явно указать 8080 или брать из env
+PORT = int(os.getenv("PORT", 8080)) 
 ADMIN_USERNAME = "Rusfer1"
 
 if not BOT_TOKEN or not GROQ_API_KEY:
@@ -28,7 +29,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
 
-# Глобальная переменная для остановки бота
+# Глобальное событие для остановки
 stop_event = asyncio.Event()
 
 # ================= FSM =================
@@ -772,9 +773,13 @@ async def main():
     except Exception as e:
         logging.warning(f"⚠️ Не удалось удалить webhook: {e}")
         
-    await start_web(int(os.getenv("PORT", 10000)))
+    # Задержка перед стартом, чтобы старый процесс точно умер (решает Conflict)
+    logging.info("⏳ Waiting 2 seconds to avoid conflict...")
+    await asyncio.sleep(2)
     
-    # Запускаем polling в фоне, чтобы мы могли ловить сигналы
+    await start_web(PORT)
+    
+    # Запускаем polling в фоне
     polling_task = asyncio.create_task(dp.start_polling(bot, drop_pending_updates=True))
     
     # Ждем сигнала остановки
