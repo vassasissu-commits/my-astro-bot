@@ -19,7 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 ADMIN_USERNAME = "Rusfer1"
-# ВАЖНО: Замените my-astro-bot-wqwl.onrender.com на ваш реальный URL из настроек Render
+# ВАЖНО: Замените на ваш реальный URL из Render Dashboard
 WEBHOOK_URL = f"https://my-astro-bot-wqwl.onrender.com/webhook"
 
 if not BOT_TOKEN or not GROQ_API_KEY:
@@ -695,7 +695,7 @@ async def admin_actions(cb: types.CallbackQuery):
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
 
-# ================= ОПЛАТА =================
+# ================= ОПЛАТА (ИСПРАВЛЕНО) =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
     packs = {
@@ -704,6 +704,8 @@ async def buy_pack(cb: types.CallbackQuery):
         "buy_premium_pack": {"title": "Безлимит", "free": 0, "vedana": 6, "cost": 200, "prem": True}
     }
     p = packs[cb.data]
+    
+    # ИСПРАВЛЕНО: Используем именованные аргументы label= и amount=
     await bot.send_invoice(
         chat_id=cb.from_user.id,
         title=f"✨ {p['title']}",
@@ -711,7 +713,7 @@ async def buy_pack(cb: types.CallbackQuery):
         payload=cb.data,
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice("Пакет прогнозов", p['cost'])]
+        prices=[LabeledPrice(label="Пакет прогнозов", amount=p['cost'])]
     )
     await cb.answer()
 
