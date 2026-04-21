@@ -150,7 +150,7 @@ async def ask_groq(prompt, system_prompt):
         logging.error(f"Groq request exception: {e}")
         return f"❌ Ошибка соединения с AI: {e}"
 
-# ================= ПРОМПТЫ (ВСЕ!) =================
+# ================= ПРОМПТЫ =================
 PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом.
 Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
 СТРУКТУРА:
@@ -379,7 +379,6 @@ async def send_pred(msg, text):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Рефералка
     args = message.text.split()
     start_param = None
     if len(args) > 1:
@@ -420,7 +419,6 @@ async def main_menu_cb(cb: types.CallbackQuery):
             await cb.message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     await cb.answer()
 
-# ------------------- Универсальная проверка онбординга -------------------
 async def ensure_onboarding(callback_query, state, target_action):
     user = get_user(callback_query.from_user.id)
     if user and user.get('name') and user.get('birth_date'):
@@ -462,10 +460,79 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     
     if target_action:
-        fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
-        await process_prediction(fake_cb, state, target_action)
+        # Вызываем предсказание без фейкового callback
+        await process_prediction_after_onboarding(message, state, target_action)
 
-# ------------------- Обработчики предсказаний -------------------
+async def process_prediction_after_onboarding(message: types.Message, state: FSMContext, action: str):
+    """Выполняет предсказание после онбординга, используя реальный message"""
+    user = get_user(message.from_user.id)
+    if not user:
+        await message.answer("Ошибка. Попробуйте /start")
+        return
+    
+    if action == "horoscope":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
+        ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
+        await send_pred(message, ans + get_shadow("horoscope"))
+    
+    elif action == "tarot":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        card = random.choice(TAROT_CARDS)
+        text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
+        await send_pred(message, text)
+    
+    elif action == "rune":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        rune = random.choice(RUNES)
+        prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
+        ans = await ask_groq(prompt, "Ты эксперт по рунам.")
+        await send_pred(message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
+    
+    elif action == "week":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        prompt = PROMPT_WEEK.format(sign=user['zodiac'])
+        ans = await ask_groq(prompt, "Ты профессиональный астролог.")
+        await send_pred(message, ans + get_shadow("week"))
+    
+    elif action == "numerology":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
+        ans = await ask_groq(prompt, "Ты нумеролог.")
+        await send_pred(message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
+    
+    elif action == "vedana_pred":
+        if user['vedana_credits'] <= 0 and not user['is_premium']:
+            await message.answer("✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
+            return
+        await send_loading_video(message)
+        await delay_thinking()
+        prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
+        ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
+        if not user['is_premium']:
+            use_vedana_credit(user['telegram_id'])
+        await send_pred(message, ans)
+    
+    elif action in ("natal", "ball", "compat"):
+        # Для этих типов нужно дополнительное взаимодействие – отправим сообщение с предложением начать заново
+        await message.answer(f"✅ Данные сохранены. Теперь нажмите на кнопку «{action}» ещё раз, чтобы начать.")
+        return
+
 async def process_prediction(callback_query, state, action):
     user = get_user(callback_query.from_user.id)
     if not user:
@@ -567,7 +634,6 @@ async def handle_compat(cb: types.CallbackQuery, state: FSMContext):
     if await ensure_onboarding(cb, state, cb.data):
         await process_prediction(cb, state, cb.data)
 
-# ------------------- FSM для натальной карты -------------------
 @dp.message(NatalState.waiting_for_time)
 async def natal_time(msg: types.Message, state: FSMContext):
     await state.update_data(time=msg.text.strip())
@@ -593,7 +659,6 @@ async def natal_place(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Произошла ошибка при составлении натальной карты. Попробуйте позже.")
     await state.clear()
 
-# ------------------- FSM для магического шара -------------------
 @dp.message(BallState.waiting_for_question)
 async def ball_question(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
@@ -612,7 +677,6 @@ async def ball_question(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Ошибка. Попробуйте ещё раз.")
     await state.clear()
 
-# ------------------- FSM для совместимости -------------------
 @dp.message(CompatState.waiting_for_partner_sign)
 async def compat_partner(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
@@ -631,7 +695,6 @@ async def compat_partner(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Ошибка. Попробуйте ещё раз.")
     await state.clear()
 
-# ------------------- Магазин, админка, рефералка -------------------
 @dp.callback_query(F.data == "shop")
 async def shop_cb(cb: types.CallbackQuery):
     text = "✨ Что скрыто за твоим знаком?\n\nВедана может заглянуть глубже, если ты готов(а) к откровению.\n\n🔮 Индивидуальное предсказание включает:\n• Точные даты событий\n• Рекомендации по цвету/камню\n• Ответ на сокровенный вопрос\n• Послание наставников"
@@ -721,7 +784,7 @@ async def admin_actions(cb: types.CallbackQuery):
     await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
 
-# ------------------- Платежи -------------------
+# ================= ПЛАТЕЖИ =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
     packs = {
@@ -735,7 +798,6 @@ async def buy_pack(cb: types.CallbackQuery):
         title=f"✨ {p['title']}",
         description="Активация через Telegram Stars",
         payload=cb.data,
-        provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label="Пакет прогнозов", amount=p['cost'])]
     )
@@ -759,7 +821,7 @@ async def pay_success(msg: types.Message):
         user = get_user(msg.from_user.id)
         await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", reply_markup=get_menu_grid(user))
 
-# ------------------- Запуск -------------------
+# ================= ЗАПУСК =================
 async def on_startup(bot: Bot):
     await bot.set_webhook(url=WEBHOOK_URL, allowed_updates=dp.resolve_used_update_types(), drop_pending_updates=True)
     logging.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
