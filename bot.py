@@ -19,7 +19,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 ADMIN_USERNAME = "Rusfer1"
-# ВАЖНО: Замените на ваш реальный URL из Render Dashboard
 WEBHOOK_URL = f"https://my-astro-bot-wqwl.onrender.com/webhook"
 
 if not BOT_TOKEN or not GROQ_API_KEY:
@@ -120,6 +119,14 @@ def add_credits(tid, free_amt=0, vedana_amt=0, set_prem=False):
     conn.commit()
     conn.close()
 
+def add_referrer_bonus(ref_user_id):
+    """Начисляет +5 бесплатных прогнозов рефереру"""
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE users SET free_credits = free_credits + 5 WHERE telegram_id = ?", (ref_user_id,))
+    conn.commit()
+    conn.close()
+    logging.info(f"Реферер {ref_user_id} получил +5 кредитов")
+
 # ================= GROQ AI =================
 async def ask_groq(prompt, system_prompt):
     try:
@@ -141,7 +148,7 @@ async def ask_groq(prompt, system_prompt):
     except Exception as e:
         return f"Ошибка: {e}"
 
-# ================= ПРОМПТЫ =================
+# ================= ПРОМПТЫ (без изменений) =================
 PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом.
 Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
 СТРУКТУРА:
@@ -305,8 +312,6 @@ def get_menu_grid(user, is_admin=False):
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
-    
-    # Исправлено: "вед" вместо "ведан"
     vedana_text = f"🔮 Индивидуальное предсказание от Веданы: {vedana_c} вед"
     
     menu_kb = [
@@ -320,12 +325,11 @@ def get_menu_grid(user, is_admin=False):
          InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")]
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
+        [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite")]
     ]
-    
     if is_admin:
         menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
-        
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
@@ -368,11 +372,37 @@ def send_pred(msg, text):
 @dp.message(F.text == "/start")
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
+    
+    # Разбираем параметр start (рефералка или метка источника)
+    args = message.text.split()
+    start_param = None
+    if len(args) > 1:
+        start_param = args[1]
+    
+    # Обработка реферальной ссылки
+    if start_param and start_param.startswith("ref_"):
+        try:
+            ref_id = int(start_param.split("_")[1])
+            # Не начисляем бонус, если пользователь перешёл по своей же ссылке
+            if ref_id != message.from_user.id:
+                # Проверяем, существует ли реферер
+                ref_user = get_user(ref_id)
+                if ref_user:
+                    add_referrer_bonus(ref_id)
+                    await message.answer("🎁 Ваш друг получил бонус! А вы получили +5 бесплатных прогнозов!")
+                else:
+                    logging.warning(f"Реферер {ref_id} не найден")
+        except Exception as e:
+            logging.error(f"Ошибка обработки рефералки: {e}")
+    elif start_param:
+        # Логируем другие источники (например, tiktok1, ads)
+        logging.info(f"Переход из источника: {start_param} от user {message.from_user.id}")
+    
     user = get_user(message.from_user.id)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
 
     if user and user.get('name'):
-        caption = f"🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны, {user['name']}."
+        caption = f"🌙 Привет, {user['name']}. Я — Ведана, твой астролог.\n\n✨ У тебя уже есть {user['free_credits'] if not user['is_premium'] else '∞'} бесплатных прогнозов на сегодня.\nВыбери, что хочешь узнать: гороскоп, совместимость, таро или руны.\n\n🔮 А если захочешь заглянуть глубже – есть тайные предсказания (индивидуальная консультация)."
         try:
             await bot.send_photo(
                 chat_id=message.chat.id,
@@ -623,6 +653,19 @@ async def save_edit(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
     await state.clear()
 
+@dp.callback_query(F.data == "invite")
+async def invite_friend(cb: types.CallbackQuery):
+    bot_username = (await bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start=ref_{cb.from_user.id}"
+    await cb.message.answer(
+        f"👥 Твоя реферальная ссылка:\n{link}\n\n"
+        f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
+        f"ты получишь +5 бесплатных прогнозов (не тратят лимит дня).\n\n"
+        f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!",
+        reply_markup=get_bottom_menu()
+    )
+    await cb.answer()
+
 # ================= АДМИН ПАНЕЛЬ =================
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(cb: types.CallbackQuery):
@@ -695,7 +738,7 @@ async def admin_actions(cb: types.CallbackQuery):
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
 
-# ================= ОПЛАТА (ИСПРАВЛЕНО) =================
+# ================= ОПЛАТА =================
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_pack(cb: types.CallbackQuery):
     packs = {
@@ -705,7 +748,6 @@ async def buy_pack(cb: types.CallbackQuery):
     }
     p = packs[cb.data]
     
-    # ИСПРАВЛЕНО: Используем именованные аргументы label= и amount=
     await bot.send_invoice(
         chat_id=cb.from_user.id,
         title=f"✨ {p['title']}",
@@ -736,12 +778,6 @@ async def pay_success(msg: types.Message):
         await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", 
                          reply_markup=get_menu_grid(user))
 
-@dp.callback_query(F.data == "invite")
-async def invite_friend(cb: types.CallbackQuery):
-    link = f"https://t.me/{(await bot.me()).username}?start=ref_{cb.from_user.id}"
-    await cb.message.answer(f"👥 Твоя ссылка:\n{link}\n\n🎁 За каждого друга ты получишь +5 бесплатных прогнозов!", reply_markup=get_bottom_menu())
-    await cb.answer()
-
 # ================= ЗАПУСК С WEBHOOKS =================
 async def on_startup(bot: Bot):
     await bot.set_webhook(
@@ -763,19 +799,16 @@ async def main():
     
     app = web.Application()
     
-    # Настраиваем обработчик вебхука
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
     )
     webhook_requests_handler.register(app, path="/webhook")
     
-    # Health check для Render
     async def health_handler(request):
         return web.Response(text="OK")
     app.add_routes([web.get("/", health_handler), web.get("/health", health_handler)])
     
-    # Подключаем приложение к dispatcher
     setup_application(app, dp, bot=bot)
     
     runner = web.AppRunner(app)
@@ -786,7 +819,6 @@ async def main():
     logging.info(f"🚀 Бот запущен на порту {PORT} с Webhooks")
     logging.info(f"🔗 Webhook URL: {WEBHOOK_URL}")
     
-    # Держим сервер запущенным
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
