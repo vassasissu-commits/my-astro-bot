@@ -309,24 +309,25 @@ def get_shop_kb():
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
+# ================= ИСПРАВЛЕННОЕ МЕНЮ (КНОПКИ В ОДИН СТОЛБЕЦ) =================
 def get_menu_grid(user, is_admin=False):
     name = user.get('name') if user.get('name') else "гость"
-    free_txt = "∞" if user['is_premium'] else str(user['free_credits'])
+    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     vedana_text = f"🔮 Индивидуальное предсказание от Веданы: {vedana_c} вед"
     
-    # КАЖДАЯ КНОПКА НА ОТДЕЛЬНОЙ СТРОКЕ - ВО ВСЮ ШИРИНУ ЭКРАНА
+    # Каждая кнопка в отдельной строке → на всю ширину
     menu_kb = [
-        [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope")],
+        [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope")],
         [InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
         [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot")],
         [InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
         [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball")],
         [InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
         [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")],
-        [InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
-        [InlineKeyboardButton(text=f"📅 Прогнозов осталось: {free_txt}", callback_data="noop")],
+        [InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
+        [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
         [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite")]
@@ -461,76 +462,8 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     
     if target_action:
-        # Запускаем предсказание после онбординга
-        await process_prediction_after_onboarding(message, state, target_action)
-
-async def process_prediction_after_onboarding(message: types.Message, state: FSMContext, action: str):
-    user = get_user(message.from_user.id)
-    if not user:
-        await message.answer("Ошибка. Попробуйте /start")
-        return
-    
-    if action == "horoscope":
-        if not check_free(user, message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(message)
-        await delay_thinking()
-        prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
-        ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
-        await send_pred(message, ans + get_shadow("horoscope"))
-    
-    elif action == "tarot":
-        if not check_free(user, message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(message)
-        await delay_thinking()
-        card = random.choice(TAROT_CARDS)
-        text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
-        await send_pred(message, text)
-    
-    elif action == "rune":
-        if not check_free(user, message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(message)
-        await delay_thinking()
-        rune = random.choice(RUNES)
-        prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
-        ans = await ask_groq(prompt, "Ты эксперт по рунам.")
-        await send_pred(message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
-    
-    elif action == "week":
-        if not check_free(user, message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(message)
-        await delay_thinking()
-        prompt = PROMPT_WEEK.format(sign=user['zodiac'])
-        ans = await ask_groq(prompt, "Ты профессиональный астролог.")
-        await send_pred(message, ans + get_shadow("week"))
-    
-    elif action == "numerology":
-        if not check_free(user, message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(message)
-        await delay_thinking()
-        prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
-        ans = await ask_groq(prompt, "Ты нумеролог.")
-        await send_pred(message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
-    
-    elif action == "vedana_pred":
-        if user['vedana_credits'] <= 0 and not user['is_premium']:
-            await message.answer("✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
-            return
-        await send_loading_video(message)
-        await delay_thinking()
-        prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
-        ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
-        if not user['is_premium']:
-            use_vedana_credit(user['telegram_id'])
-        await send_pred(message, ans)
-    
-    elif action in ("natal", "ball", "compat"):
-        await message.answer(f"✅ Данные сохранены. Теперь нажмите на кнопку «{action}» ещё раз, чтобы начать.")
-        return
+        fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
+        await process_prediction(fake_cb, state, target_action)
 
 async def process_prediction(callback_query, state, action):
     user = get_user(callback_query.from_user.id)
