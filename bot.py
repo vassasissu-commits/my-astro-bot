@@ -311,21 +311,22 @@ def get_shop_kb():
 
 def get_menu_grid(user, is_admin=False):
     name = user.get('name') if user.get('name') else "гость"
-    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
+    free_txt = "∞" if user['is_premium'] else str(user['free_credits'])
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     vedana_text = f"🔮 Индивидуальное предсказание от Веданы: {vedana_c} вед"
     
+    # КАЖДАЯ КНОПКА НА ОТДЕЛЬНОЙ СТРОКЕ - ВО ВСЮ ШИРИНУ ЭКРАНА
     menu_kb = [
-        [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
-         InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
-        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
-        [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
+        [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope")],
+        [InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot")],
+        [InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
+        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball")],
+        [InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
+        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")],
+        [InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+        [InlineKeyboardButton(text=f"📅 Прогнозов осталось: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
         [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite")]
@@ -460,11 +461,10 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     
     if target_action:
-        # Вызываем предсказание без фейкового callback
+        # Запускаем предсказание после онбординга
         await process_prediction_after_onboarding(message, state, target_action)
 
 async def process_prediction_after_onboarding(message: types.Message, state: FSMContext, action: str):
-    """Выполняет предсказание после онбординга, используя реальный message"""
     user = get_user(message.from_user.id)
     if not user:
         await message.answer("Ошибка. Попробуйте /start")
@@ -529,7 +529,6 @@ async def process_prediction_after_onboarding(message: types.Message, state: FSM
         await send_pred(message, ans)
     
     elif action in ("natal", "ball", "compat"):
-        # Для этих типов нужно дополнительное взаимодействие – отправим сообщение с предложением начать заново
         await message.answer(f"✅ Данные сохранены. Теперь нажмите на кнопку «{action}» ещё раз, чтобы начать.")
         return
 
