@@ -309,32 +309,31 @@ def get_shop_kb():
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
-# ================= ИСПРАВЛЕННОЕ МЕНЮ (КНОПКИ В ОДИН СТОЛБЕЦ) =================
-def get_menu_grid(user, is_admin=False):
+# ================= НОВАЯ REPLY-КЛАВИАТУРА (НА ВСЮ ШИРИНУ) =================
+def get_menu_reply_keyboard(user, is_admin=False):
     name = user.get('name') if user.get('name') else "гость"
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
-    vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     vedana_text = f"🔮 Индивидуальное предсказание от Веданы: {vedana_c} вед"
     
-    # Каждая кнопка в отдельной строке → на всю ширину
-    menu_kb = [
-        [InlineKeyboardButton(text="🌟 Гороскоп", callback_data="horoscope")],
-        [InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Таро", callback_data="tarot")],
-        [InlineKeyboardButton(text="💕 Совместимость", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball")],
-        [InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
-        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")],
-        [InlineKeyboardButton(text="📅 На неделю", callback_data="week")],
-        [InlineKeyboardButton(text=f"📅 Прогнозы: {free_txt}", callback_data="noop")],
-        [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
-        [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite")]
-    ]
+    menu_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🌟 Гороскоп"), KeyboardButton(text="🌌 Натальная карта")],
+            [KeyboardButton(text="🃏 Таро"), KeyboardButton(text="💕 Совместимость")],
+            [KeyboardButton(text="🔮 Магический шар"), KeyboardButton(text="ᚠ Гадание на рунах")],
+            [KeyboardButton(text="🔢 Нумерология"), KeyboardButton(text="📅 На неделю")],
+            [KeyboardButton(text=f"📅 Прогнозы: {free_txt}")],
+            [KeyboardButton(text=vedana_text)],
+            [KeyboardButton(text="✏️ Изменить данные"), KeyboardButton(text="👥 Пригласить друга")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True
+    )
     if is_admin:
-        menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
-    return InlineKeyboardMarkup(inline_keyboard=menu_kb)
+        # Добавляем админ-кнопку отдельным рядом
+        menu_kb.keyboard.append([KeyboardButton(text="⚙️ Админ-панель")])
+    return menu_kb
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
@@ -375,61 +374,11 @@ async def send_pred(msg, text):
         logging.error(f"Ошибка отправки предсказания: {e}")
         await msg.answer(text, reply_markup=get_after_pred_kb())
 
-# ================= ОБРАБОТЧИКИ =================
-@dp.message(Command("start"))
-@dp.message(F.text == "/start")
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    
-    args = message.text.split()
-    start_param = None
-    if len(args) > 1:
-        start_param = args[1]
-    if start_param and start_param.startswith("ref_"):
-        try:
-            ref_id = int(start_param.split("_")[1])
-            if ref_id != message.from_user.id:
-                ref_user = get_user(ref_id)
-                if ref_user:
-                    add_referrer_bonus(ref_id)
-                    await message.answer("🎁 Ваш друг получил бонус! А вы получили +5 бесплатных прогнозов!")
-        except:
-            pass
-    elif start_param:
-        logging.info(f"Переход из источника: {start_param} от user {message.from_user.id}")
-    
-    if not get_user(message.from_user.id):
-        add_or_update_user(message.from_user.id)
-    
-    user = get_user(message.from_user.id)
-    is_admin = (message.from_user.username == ADMIN_USERNAME)
-    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
-    try:
-        await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-    except:
-        await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "main_menu")
-async def main_menu_cb(cb: types.CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if user:
-        is_admin = (cb.from_user.username == ADMIN_USERNAME)
-        caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
-        try:
-            await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-        except:
-            await cb.message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-    await cb.answer()
-
-async def ensure_onboarding(callback_query, state, target_action):
-    user = get_user(callback_query.from_user.id)
-    if user and user.get('name') and user.get('birth_date'):
-        return True
+# ================= ОНБОРДИНГ =================
+async def start_onboarding_from_message(message: types.Message, state: FSMContext, target_action: str):
     await state.update_data(target_action=target_action)
-    await callback_query.message.answer("🔮 Прежде чем звёзды заговорят, представься.\nКак тебя зовут?")
+    await message.answer("🔮 Прежде чем звёзды заговорят, представься.\nКак тебя зовут?")
     await state.set_state(OnboardingState.waiting_for_name)
-    await callback_query.answer()
-    return False
 
 @dp.message(OnboardingState.waiting_for_name)
 async def onboarding_name(message: types.Message, state: FSMContext):
@@ -457,115 +406,98 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     is_admin = (message.from_user.username == ADMIN_USERNAME)
     caption = f"♐ Знак: {zodiac}\nТеперь вы можете заказать прогноз, {name}."
     try:
-        await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+        await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
     except:
-        await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+        await message.answer(caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
     
     if target_action:
-        fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
-        await process_prediction(fake_cb, state, target_action)
+        # Выполняем целевое действие после онбординга
+        await process_prediction_from_message(message, state, target_action)
 
-async def process_prediction(callback_query, state, action):
-    user = get_user(callback_query.from_user.id)
+# ================= ОСНОВНЫЕ ОБРАБОТЧИКИ ПРЕДСКАЗАНИЙ =================
+async def process_prediction_from_message(message: types.Message, state: FSMContext, action: str):
+    user = get_user(message.from_user.id)
     if not user:
-        await callback_query.message.answer("Ошибка. Попробуйте /start")
+        await message.answer("Ошибка. Попробуйте /start")
         return
     
     if action == "horoscope":
-        if not check_free(user, callback_query.message): return
+        if not check_free(user, message): return
         use_free_credit(user['telegram_id'])
-        await send_loading_video(callback_query.message)
+        await send_loading_video(message)
         await delay_thinking()
         prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
         ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
-        await send_pred(callback_query.message, ans + get_shadow("horoscope"))
+        await send_pred(message, ans + get_shadow("horoscope"))
+    
+    elif action == "natal":
+        if not check_free(user, message): return
+        await message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
+        await state.update_data(natal_action=True)
+        await state.set_state(NatalState.waiting_for_time)
     
     elif action == "tarot":
-        if not check_free(user, callback_query.message): return
+        if not check_free(user, message): return
         use_free_credit(user['telegram_id'])
-        await send_loading_video(callback_query.message)
+        await send_loading_video(message)
         await delay_thinking()
         card = random.choice(TAROT_CARDS)
         text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
-        await send_pred(callback_query.message, text)
+        await send_pred(message, text)
+    
+    elif action == "compat":
+        if not check_free(user, message): return
+        await message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
+        await state.update_data(compat_action=True)
+        await state.set_state(CompatState.waiting_for_partner_sign)
+    
+    elif action == "ball":
+        if not check_free(user, message): return
+        await message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
+        await state.update_data(ball_action=True)
+        await state.set_state(BallState.waiting_for_question)
     
     elif action == "rune":
-        if not check_free(user, callback_query.message): return
+        if not check_free(user, message): return
         use_free_credit(user['telegram_id'])
-        await send_loading_video(callback_query.message)
+        await send_loading_video(message)
         await delay_thinking()
         rune = random.choice(RUNES)
         prompt = PROMPT_RUNE.format(rune_name=rune['name'], sign=user.get('zodiac', ''))
         ans = await ask_groq(prompt, "Ты эксперт по рунам.")
-        await send_pred(callback_query.message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
-    
-    elif action == "week":
-        if not check_free(user, callback_query.message): return
-        use_free_credit(user['telegram_id'])
-        await send_loading_video(callback_query.message)
-        await delay_thinking()
-        prompt = PROMPT_WEEK.format(sign=user['zodiac'])
-        ans = await ask_groq(prompt, "Ты профессиональный астролог.")
-        await send_pred(callback_query.message, ans + get_shadow("week"))
+        await send_pred(message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
     
     elif action == "numerology":
-        if not check_free(user, callback_query.message): return
+        if not check_free(user, message): return
         use_free_credit(user['telegram_id'])
-        await send_loading_video(callback_query.message)
+        await send_loading_video(message)
         await delay_thinking()
         prompt = f"Нумерология для {user['birth_date']}. Число пути и трактовка."
         ans = await ask_groq(prompt, "Ты нумеролог.")
-        await send_pred(callback_query.message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
+        await send_pred(message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
+    
+    elif action == "week":
+        if not check_free(user, message): return
+        use_free_credit(user['telegram_id'])
+        await send_loading_video(message)
+        await delay_thinking()
+        prompt = PROMPT_WEEK.format(sign=user['zodiac'])
+        ans = await ask_groq(prompt, "Ты профессиональный астролог.")
+        await send_pred(message, ans + get_shadow("week"))
     
     elif action == "vedana_pred":
         if user['vedana_credits'] <= 0 and not user['is_premium']:
-            await callback_query.message.answer("✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
+            await message.answer("✨ У тебя нет свободных предсказаний Веданы.\n\nРаскрой тайны в магазине:", reply_markup=get_shop_kb())
             return
-        await send_loading_video(callback_query.message)
+        await send_loading_video(message)
         await delay_thinking()
         prompt = PROMPT_VEDANA.format(name=user['name'], sign=user['zodiac'], birth_date=user['birth_date'])
         ans = await ask_groq(prompt, "Ты Ведана, опытный астролог.")
         if not user['is_premium']:
             use_vedana_credit(user['telegram_id'])
-        await send_pred(callback_query.message, ans)
-    
-    elif action in ("natal", "ball", "compat"):
-        if action == "natal":
-            if not check_free(user, callback_query.message): return
-            await callback_query.message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
-            await state.set_state(NatalState.waiting_for_time)
-        elif action == "ball":
-            if not check_free(user, callback_query.message): return
-            await callback_query.message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
-            await state.set_state(BallState.waiting_for_question)
-        elif action == "compat":
-            if not check_free(user, callback_query.message): return
-            await callback_query.message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
-            await state.set_state(CompatState.waiting_for_partner_sign)
-        await callback_query.answer()
-        return
-    await callback_query.answer()
+        await send_pred(message, ans)
 
-@dp.callback_query(F.data.in_({"horoscope","tarot","rune","week","numerology","vedana_pred"}))
-async def handle_simple_pred(cb: types.CallbackQuery, state: FSMContext):
-    if await ensure_onboarding(cb, state, cb.data):
-        await process_prediction(cb, state, cb.data)
-
-@dp.callback_query(F.data == "natal")
-async def handle_natal(cb: types.CallbackQuery, state: FSMContext):
-    if await ensure_onboarding(cb, state, cb.data):
-        await process_prediction(cb, state, cb.data)
-
-@dp.callback_query(F.data == "ball")
-async def handle_ball(cb: types.CallbackQuery, state: FSMContext):
-    if await ensure_onboarding(cb, state, cb.data):
-        await process_prediction(cb, state, cb.data)
-
-@dp.callback_query(F.data == "compat")
-async def handle_compat(cb: types.CallbackQuery, state: FSMContext):
-    if await ensure_onboarding(cb, state, cb.data):
-        await process_prediction(cb, state, cb.data)
-
+# ================= ОБРАБОТЧИКИ FSM ДЛЯ NATAL, BALL, COMPAT =================
 @dp.message(NatalState.waiting_for_time)
 async def natal_time(msg: types.Message, state: FSMContext):
     await state.update_data(time=msg.text.strip())
@@ -575,7 +507,7 @@ async def natal_time(msg: types.Message, state: FSMContext):
 @dp.message(NatalState.waiting_for_place)
 async def natal_place(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): 
+    if not user or not check_free(user, msg):
         await state.clear()
         return
     data = await state.get_data()
@@ -594,7 +526,7 @@ async def natal_place(msg: types.Message, state: FSMContext):
 @dp.message(BallState.waiting_for_question)
 async def ball_question(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): 
+    if not user or not check_free(user, msg):
         await state.clear()
         return
     await send_loading_video(msg)
@@ -612,7 +544,7 @@ async def ball_question(msg: types.Message, state: FSMContext):
 @dp.message(CompatState.waiting_for_partner_sign)
 async def compat_partner(msg: types.Message, state: FSMContext):
     user = get_user(msg.from_user.id)
-    if not user or not check_free(user, msg): 
+    if not user or not check_free(user, msg):
         await state.clear()
         return
     await send_loading_video(msg)
@@ -627,6 +559,136 @@ async def compat_partner(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Ошибка. Попробуйте ещё раз.")
     await state.clear()
 
+# ================= ОБРАБОТЧИК МЕНЮ (Reply-клавиатура) =================
+@dp.message(F.text.in_([
+    "🌟 Гороскоп", "🌌 Натальная карта", "🃏 Таро", "💕 Совместимость",
+    "🔮 Магический шар", "ᚠ Гадание на рунах", "🔢 Нумерология", "📅 На неделю",
+    "✏️ Изменить данные", "👥 Пригласить друга", "⚙️ Админ-панель"
+]))
+async def menu_reply_handler(message: types.Message, state: FSMContext):
+    text = message.text
+    user = get_user(message.from_user.id)
+    
+    # Специальные кнопки, не требующие онбординга
+    if text == "✏️ Изменить данные":
+        await message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
+        # Временный хендлер
+        @dp.message(F.text)
+        async def save_edit(msg: types.Message, s_state: FSMContext):
+            try:
+                datetime.strptime(msg.text.strip(), "%d.%m.%Y")
+                zodiac = calculate_zodiac(msg.text.strip())
+                add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
+                await msg.answer("✅ Дата обновлена!", reply_markup=get_menu_reply_keyboard(get_user(msg.from_user.id)))
+            except:
+                await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
+            await s_state.clear()
+        return
+    
+    if text == "👥 Пригласить друга":
+        bot_username = (await bot.get_me()).username
+        link = f"https://t.me/{bot_username}?start=ref_{message.from_user.id}"
+        await message.answer(
+            f"👥 Твоя реферальная ссылка:\n{link}\n\n"
+            f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
+            f"ты получишь +5 бесплатных прогнозов.\n\n"
+            f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!",
+            reply_markup=get_bottom_menu()
+        )
+        return
+    
+    if text == "⚙️ Админ-панель":
+        if message.from_user.username != ADMIN_USERNAME:
+            await message.answer("🔒 Доступ запрещён")
+            return
+        user_adm = get_user(message.from_user.id)
+        adm_text = (f"⚙️ Админ-панель (@{ADMIN_USERNAME})\n\n"
+                    f"👤 Ваш баланс:\n"
+                    f"• Прогнозы: {user_adm['free_credits']}/3\n"
+                    f"• Веды: {user_adm['vedana_credits']}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ +5 прогнозов", callback_data="admin_add_free")],
+            [InlineKeyboardButton(text="➕ +1 вед", callback_data="admin_add_vedana")],
+            [InlineKeyboardButton(text="🔄 Сброс", callback_data="admin_reset")],
+            [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="main_menu")]
+        ])
+        await message.answer(adm_text, reply_markup=kb)
+        return
+    
+    # Кнопка "Индивидуальное предсказание от Веданы"
+    if text.startswith("🔮 Индивидуальное предсказание от Веданы"):
+        action = "vedana_pred"
+        if user and user.get('name') and user.get('birth_date'):
+            await process_prediction_from_message(message, state, action)
+        else:
+            await start_onboarding_from_message(message, state, action)
+        return
+    
+    # Все остальные кнопки
+    action_map = {
+        "🌟 Гороскоп": "horoscope",
+        "🌌 Натальная карта": "natal",
+        "🃏 Таро": "tarot",
+        "💕 Совместимость": "compat",
+        "🔮 Магический шар": "ball",
+        "ᚠ Гадание на рунах": "rune",
+        "🔢 Нумерология": "numerology",
+        "📅 На неделю": "week",
+    }
+    action = action_map.get(text)
+    if action:
+        if user and user.get('name') and user.get('birth_date'):
+            await process_prediction_from_message(message, state, action)
+        else:
+            await start_onboarding_from_message(message, state, action)
+
+# ================= КОМАНДА /start =================
+@dp.message(Command("start"))
+@dp.message(F.text == "/start")
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
+    
+    # Обработка реферальной ссылки
+    args = message.text.split()
+    start_param = None
+    if len(args) > 1:
+        start_param = args[1]
+    if start_param and start_param.startswith("ref_"):
+        try:
+            ref_id = int(start_param.split("_")[1])
+            if ref_id != message.from_user.id:
+                ref_user = get_user(ref_id)
+                if ref_user:
+                    add_referrer_bonus(ref_id)
+                    await message.answer("🎁 Ваш друг получил бонус! А вы получили +5 бесплатных прогнозов!")
+        except:
+            pass
+    elif start_param:
+        logging.info(f"Переход из источника: {start_param} от user {message.from_user.id}")
+    
+    if not get_user(message.from_user.id):
+        add_or_update_user(message.from_user.id)
+    
+    user = get_user(message.from_user.id)
+    is_admin = (message.from_user.username == ADMIN_USERNAME)
+    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+    try:
+        await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
+    except:
+        await message.answer(caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "main_menu")
+async def main_menu_cb(cb: types.CallbackQuery):
+    user = get_user(cb.from_user.id)
+    if user:
+        is_admin = (cb.from_user.username == ADMIN_USERNAME)
+        caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+        try:
+            await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
+        except:
+            await cb.message.answer(caption, reply_markup=get_menu_reply_keyboard(user, is_admin), parse_mode="Markdown")
+    await cb.answer()
+
 @dp.callback_query(F.data == "shop")
 async def shop_cb(cb: types.CallbackQuery):
     text = "✨ Что скрыто за твоим знаком?\n\nВедана может заглянуть глубже, если ты готов(а) к откровению.\n\n🔮 Индивидуальное предсказание включает:\n• Точные даты событий\n• Рекомендации по цвету/камню\n• Ответ на сокровенный вопрос\n• Послание наставников"
@@ -636,53 +698,7 @@ async def shop_cb(cb: types.CallbackQuery):
         await cb.message.answer(text, reply_markup=get_shop_kb())
     await cb.answer()
 
-@dp.callback_query(F.data == "edit")
-async def edit(cb: types.CallbackQuery):
-    await cb.message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
-    await cb.answer()
-    @dp.message(F.text)
-    async def save_edit(msg: types.Message, state: FSMContext):
-        try:
-            datetime.strptime(msg.text.strip(), "%d.%m.%Y")
-            zodiac = calculate_zodiac(msg.text.strip())
-            add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
-            await msg.answer("✅ Дата обновлена!", reply_markup=get_menu_grid(get_user(msg.from_user.id)))
-        except:
-            await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
-        await state.clear()
-
-@dp.callback_query(F.data == "invite")
-async def invite_friend(cb: types.CallbackQuery):
-    bot_username = (await bot.get_me()).username
-    link = f"https://t.me/{bot_username}?start=ref_{cb.from_user.id}"
-    await cb.message.answer(
-        f"👥 Твоя реферальная ссылка:\n{link}\n\n"
-        f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
-        f"ты получишь +5 бесплатных прогнозов.\n\n"
-        f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!",
-        reply_markup=get_bottom_menu()
-    )
-    await cb.answer()
-
-@dp.callback_query(F.data == "admin_panel")
-async def admin_panel(cb: types.CallbackQuery):
-    if cb.from_user.username != ADMIN_USERNAME:
-        await cb.answer("🔒 Доступ запрещён", show_alert=True)
-        return
-    user = get_user(cb.from_user.id)
-    text = (f"⚙️ Админ-панель (@{ADMIN_USERNAME})\n\n"
-            f"👤 Ваш баланс:\n"
-            f"• Прогнозы: {user['free_credits']}/3\n"
-            f"• Веды: {user['vedana_credits']}")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ +5 прогнозов", callback_data="admin_add_free")],
-        [InlineKeyboardButton(text="➕ +1 вед", callback_data="admin_add_vedana")],
-        [InlineKeyboardButton(text="🔄 Сброс", callback_data="admin_reset")],
-        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="main_menu")]
-    ])
-    await cb.message.answer(text, reply_markup=kb)
-    await cb.answer()
-
+# ================= АДМИН-ОБРАБОТЧИКИ (колбэки) =================
 @dp.callback_query(F.data.startswith("admin_"))
 async def admin_actions(cb: types.CallbackQuery):
     if cb.from_user.username != ADMIN_USERNAME:
@@ -751,7 +767,7 @@ async def pay_success(msg: types.Message):
     if p:
         add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
         user = get_user(msg.from_user.id)
-        await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", reply_markup=get_menu_grid(user))
+        await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", reply_markup=get_menu_reply_keyboard(user))
 
 # ================= ЗАПУСК =================
 async def on_startup(bot: Bot):
