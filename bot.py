@@ -7,7 +7,7 @@ import aiohttp
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -146,7 +146,7 @@ async def ask_groq(prompt, system_prompt):
     except Exception as e:
         return f"❌ Ошибка: {e}"
 
-# ================= ПРОМПТЫ =================
+# ================= ПРОМПТЫ (полные, как в вашей версии) =================
 PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом.
 Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
 СТРУКТУРА:
@@ -233,14 +233,61 @@ def get_shadow(pred_type):
     return "\n\n" + random.choice(SHADOWS.get(pred_type, ["🔮 Звёзды видят больше..."]))
 
 # ================= ТАРО =================
-TAROT_CARDS = [ ... ]  # (список такой же как в предыдущей версии, для краткости опущен, но в реальном коде должен быть)
+TAROT_CARDS = [
+    {"name": "🃏 Шут (0)", "desc": "🌬️ Начало пути, чистый лист.\n\n✨ Ты стоишь на пороге нового цикла. Вселенная приглашает отпустить контроль и довериться потоку.\n💫 Сейчас не время для долгих раздумий. Спонтанность станет проводником.\n🕊️ Рискни там, где раньше боялся. Удача любит смелых."},
+    {"name": "🎩 Маг (I)", "desc": "🔮 Сила воли и мастерство.\n\n✨ У тебя в руках все инструменты для успеха. Нужно лишь сфокусировать намерение.\n💫 Твои слова и мысли материализуются быстрее обычного.\n⚡ Действуй осознанно: ты создаёшь свою реальность прямо сейчас."},
+    {"name": "📜 Жрица (II)", "desc": "🌙 Интуиция и тайны.\n\n✨ Ответы уже внутри тебя. Прислушайся к тихому голосу подсознания.\n💫 Сны и знаки будут особенно яркими в ближайшие дни.\n🤫 Не торопи события. Мудрость приходит в тишине."},
+    {"name": "👑 Императрица (III)", "desc": "🌿 Плодородие и изобилие.\n\n✨ Время творить и принимать дары мира.\n💫 Отношения и проекты получат мощный импульс роста.\n🌸 Позволь себе наслаждаться процессом."},
+    {"name": "🏛️ Император (IV)", "desc": "⚖️ Власть и структура.\n\n✨ Нужна дисциплина и чёткий план. Хаос отступает перед порядком.\n💫 Возьми ответственность за свою жизнь в свои руки.\n🛡️ Установи границы: они защитят твою энергию."},
+    {"name": "🔑 Иерофант (V)", "desc": "📖 Традиции и обучение.\n\n✨ Ищи наставника или обратись к проверенным знаниям.\n💫 Духовные практики и ритуалы принесут ясность.\n🤝 Объединение с единомышленниками усилит твой путь."},
+    {"name": "💞 Влюбленные (VI)", "desc": "❤️ Выбор и любовь.\n\n✨ Перед тобой стоит важный выбор. Слушай сердце, но не игнорируй разум.\n💫 Гармония в отношениях возможна через честность.\n🦋 Принятие решения откроет новую дверь."},
+    {"name": "🏇 Колесница (VII)", "desc": "🔥 Победа и движение.\n\n✨ Ты на верном пути. Не сворачивай, даже если ветер встречный.\n💫 Контролируй эмоции: они могут увести в сторону.\n🏆 Успех ближе, чем кажется. Действуй решительно."},
+    {"name": "🦁 Сила (VIII)", "desc": "🌸 Терпение и мужество.\n\n✨ Настоящая сила — в мягкости и самообладании.\n💫 Укроти внутренние страхи любовью, а не борьбой.\n🕊️ Ты справишься с любым испытанием, сохраняя достоинство."},
+    {"name": "🕯️ Отшельник (IX)", "desc": "🌌 Поиск истины.\n\n✨ Время для уединения и глубокого самоанализа.\n💫 Внешний шум мешает слышать внутренний компас.\n🔦 Твой собственный свет укажет путь. Не бойся одиночества."},
+    {"name": "🎡 Колесо Фортуны (X)", "desc": "🔄 Перемены и судьба.\n\n✨ Цикл завершается, начинается новый. Всё идёт по плану высших сил.\n💫 Удача поворачивается к тебе лицом. Используй момент.\n🌊 Плыви по течению, но держи руль."},
+    {"name": "⚖️ Справедливость (XI)", "desc": "📜 Карма и правда.\n\n✨ Ты получишь ровно то, что заслужил. Честность вознаграждается.\n💫 Юридические или важные договорные вопросы решатся в твою пользу.\n🕊️ Принимай решения с холодной головой и чистым сердцем."},
+    {"name": "🙃 Повешенный (XII)", "desc": "🔄 Жертва и новый взгляд.\n\n✨ Иногда нужно остановиться, чтобы увидеть картину целиком.\n💫 Отпусти старое, чтобы освободить место для нового.\n🌿 Пауза — это не поражение, а стратегическая мудрость."},
+    {"name": "💀 Смерть (XIII)", "desc": "🦋 Трансформация.\n\n✨ Что-то должно уйти, чтобы родилось нечто большее.\n💫 Не цепляйся за прошлое. Трансформация неизбежна и благодатна.\n🌅 Закат всегда предшествует рассвету. Доверься процессу."},
+    {"name": "⏳ Умеренность (XIV)", "desc": "💧 Баланс и терпение.\n\n✨ Ищи золотую середину во всём. Крайности сейчас опасны.\n💫 Исцеление приходит через гармонию и спокойствие.\n🕊️ Смешивай противоположности: так рождается алхимия успеха."},
+    {"name": "⛓️ Дьявол (XV)", "desc": "🔥 Искушения и зависимости.\n\n✨ Осознай, что держит тебя в плену: страх, привычка или чужое мнение.\n💫 Цепи существуют только в твоей голове. Ты свободен освободиться.\n🌑 Тень требует внимания, а не подавления."},
+    {"name": "🏰 Башня (XVI)", "desc": "⚡ Внезапные перемены.\n\n✨ Старые структуры рушатся, чтобы освободить место для истины.\n💫 Шок временный. За разрушением следует очищение.\n🌩️ Не сопротивляйся. Позволь молнии сжечь иллюзии."},
+    {"name": "⭐ Звезда (XVII)", "desc": "🌠 Надежда и вдохновение.\n\n✨ После бури наступает ясность. Верь в свою мечту.\n💫 Вселенная посылает тебе знаки поддержки. Замечай их.\n💧 Исцеление уже в пути. Сохраняй веру."},
+    {"name": "🌑 Луна (XVIII)", "desc": "🌊 Иллюзии и страхи.\n\n✨ Не всё то, чем кажется. Доверяй фактам, а не догадкам.\n💫 Подсознание активно. Сны могут нести важные послания.\n🌫️ Пройди через туман сомнений: за ним ждёт берег."},
+    {"name": "☀️ Солнце (XIX)", "desc": "🌻 Радость и успех.\n\n✨ Ясность, тепло и витальность наполняют твою жизнь.\n💫 Проекты завершаются успешно. Дети и творчество приносят счастье.\n🔆 Наслаждайся моментом: ты в потоке изобилия."},
+    {"name": "📯 Суд (XX)", "desc": "🔔 Возрождение и призыв.\n\n✨ Пришло время подвести итоги и ответить на зов судьбы.\n💫 Прошлые ошибки прощены. Начинай с чистого листа.\n🕊️ Пробуждение сознания меняет всё. Действуй по высшему импульсу."},
+    {"name": "🌍 Мир (XXI)", "desc": "🕊️ Завершение и гармония.\n\n✨ Цикл успешно завершён. Ты целостен и в ладу с миром.\n💫 Путешествия, обучение и расширение горизонтов благоприятны.\n🌐 Ты на своём месте. Наслаждайся плодами труда."}
+]
 
 # ================= РУНЫ =================
-RUNES = [ ... ]  # (список такой же)
+RUNES = [
+    {"name": "ᚠ Феху", "desc": "Богатство, изобилие, новая энергия"},
+    {"name": "ᚢ Уруз", "desc": "Сила, здоровье, жизненная мощь"},
+    {"name": "ᚦ Турисаз", "desc": "Врата, защита, активное действие"},
+    {"name": "ᚬ Ансуз", "desc": "Знание, общение, божественное вдохновение"},
+    {"name": "ᚱ Райдо", "desc": "Путь, путешествие, правильный выбор"},
+    {"name": "ᚲ Кеназ", "desc": "Огонь, творчество, озарение"},
+    {"name": "ᚷ Гебо", "desc": "Дар, партнёрство, равновесие"},
+    {"name": "ᚹ Вуньо", "desc": "Радость, успех, гармония"},
+    {"name": "ᚺ Хагалаз", "desc": "Разрушение, кризис, трансформация"},
+    {"name": "ᚾ Наутиз", "desc": "Нужда, ограничение, терпение"},
+    {"name": "ᛁ Иса", "desc": "Лёд, остановка, застой"},
+    {"name": "ᛊ Йера", "desc": "Урожай, цикл, вознаграждение"},
+    {"name": "ᛇ Эйваз", "desc": "Защита, выносливость, связь миров"},
+    {"name": "ᛈ Перт", "desc": "Тайна, интуиция, скрытое знание"},
+    {"name": "ᛉ Альгиз", "desc": "Защита, покровительство, инстинкт"},
+    {"name": "ᛋ Соулу", "desc": "Солнце, успех, целостность"},
+    {"name": "ᛏ Тейваз", "desc": "Воин, победа, справедливость"},
+    {"name": "ᛒ Беркана", "desc": "Рост, плодородие, исцеление"},
+    {"name": "ᛖ Эваз", "desc": "Движение, прогресс, доверие"},
+    {"name": "ᛗ Манназ", "desc": "Человек, самосознание, общество"},
+    {"name": "ᛚ Лагуз", "desc": "Вода, интуиция, поток"},
+    {"name": "ᛟ Ингуз", "desc": "Плодородие, завершение, потенциал"},
+    {"name": "ᛞ Дагаз", "desc": "День, прорыв, трансформация"},
+    {"name": "ᛟ Одал", "desc": "Наследие, дом, корни"}
+]
 
 # ================= КЛАВИАТУРЫ =================
-def get_bottom_menu():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/start")]], resize_keyboard=True, is_persistent=False)
+# Нет Reply-клавиатуры, только инлайн-кнопки
 
 def get_after_pred_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -262,7 +309,6 @@ def get_menu_grid(user, is_admin=False):
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
-    # Разбиваем длинный текст на две строки, чтобы кнопка была выше и текст читался
     vedana_text = f"🔮 Индивидуальное предсказание\nот Веданы: {vedana_c} вед"
     
     menu_kb = [
@@ -282,6 +328,10 @@ def get_menu_grid(user, is_admin=False):
     if is_admin:
         menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
+
+async def send_commands_hint(message: types.Message):
+    """Отправляет текстовую подсказку с командами (как у конкурентов)"""
+    await message.answer("/start Запустить (если бот не отвечает)\n/menu Главное меню")
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
@@ -311,7 +361,7 @@ def calculate_zodiac(birth_date):
 
 def check_free(user, msg):
     if not user['is_premium'] and user['free_credits'] <= 0:
-        asyncio.create_task(msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!", reply_markup=get_bottom_menu()))
+        asyncio.create_task(msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!"))
         return False
     return True
 
@@ -328,7 +378,6 @@ async def send_pred(msg, text):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Рефералка
     args = message.text.split()
     start_param = None
     if len(args) > 1:
@@ -346,7 +395,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     elif start_param:
         logging.info(f"Переход из источника: {start_param} от user {message.from_user.id}")
     
-    # Если пользователь не существует, создаём запись с пустыми данными
     if not get_user(message.from_user.id):
         add_or_update_user(message.from_user.id)
     
@@ -357,8 +405,24 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+    await send_commands_hint(message)
 
-# Универсальная функция запуска онбординга с сохранением callback
+@dp.message(Command("menu"))
+@dp.message(F.text == "/menu")
+async def cmd_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    user = get_user(message.from_user.id)
+    if not user:
+        await cmd_start(message, state)
+        return
+    is_admin = (message.from_user.username == ADMIN_USERNAME)
+    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+    try:
+        await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+    except:
+        await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+    await send_commands_hint(message)
+
 async def start_onboarding(callback: types.CallbackQuery, state: FSMContext, target_action: str):
     await state.update_data(target_action=target_action)
     await callback.message.answer("🔮 Прежде чем звёзды заговорят, представься.\nКак тебя зовут?")
@@ -368,7 +432,7 @@ async def start_onboarding(callback: types.CallbackQuery, state: FSMContext, tar
 @dp.message(OnboardingState.waiting_for_name)
 async def onboarding_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
-    await message.answer(f"✨ {message.text.strip()}!\n\n📅 Теперь дату рождения (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
+    await message.answer(f"✨ {message.text.strip()}!\n\n📅 Теперь дату рождения (ДД.ММ.ГГГГ):")
     await state.set_state(OnboardingState.waiting_for_birthdate)
 
 @dp.message(OnboardingState.waiting_for_birthdate)
@@ -376,7 +440,7 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     try:
         datetime.strptime(message.text.strip(), "%d.%m.%Y")
     except:
-        await message.answer("❌ Неверно. Формат: ДД.ММ.ГГГГ", reply_markup=get_bottom_menu())
+        await message.answer("❌ Неверно. Формат: ДД.ММ.ГГГГ")
         return
     data = await state.get_data()
     name = data.get('name')
@@ -393,12 +457,10 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+    await send_commands_hint(message)
     
-    # Если было целевое действие, выполняем его
     if target_action:
-        # Создаём фейковый callback для повторного вызова обработчика
         fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
-        # Вызываем нужную функцию
         if target_action == "horoscope":
             await horoscope(fake_cb, state)
         elif target_action == "natal":
@@ -419,7 +481,6 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
             await vedana_pred(fake_cb, state)
 
 # ================= ОБРАБОТЧИКИ ПРЕДСКАЗАНИЙ =================
-# Каждый обработчик сначала проверяет наличие данных, если нет — запускает онбординг
 async def check_and_run(callback: types.CallbackQuery, state: FSMContext, action_name: str, coro):
     user = get_user(callback.from_user.id)
     if not user or not user.get('name') or not user.get('birth_date'):
@@ -438,6 +499,7 @@ async def horoscope(cb: types.CallbackQuery, state: FSMContext):
         prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
         ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
         await send_pred(c.message, ans + get_shadow("horoscope"))
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "horoscope", _exec)
 
@@ -446,7 +508,7 @@ async def natal(cb: types.CallbackQuery, state: FSMContext):
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): return
-        await c.message.answer("🌌 Введи время рождения (ЧЧ:ММ):", reply_markup=get_bottom_menu())
+        await c.message.answer("🌌 Введи время рождения (ЧЧ:ММ):")
         await s.update_data(natal_mode=True)
         await s.set_state(NatalState.waiting_for_time)
         await c.answer()
@@ -457,7 +519,7 @@ async def ball_menu(cb: types.CallbackQuery, state: FSMContext):
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): return
-        await c.message.answer("🔮 Напиши вопрос шару:", reply_markup=get_bottom_menu())
+        await c.message.answer("🔮 Напиши вопрос шару:")
         await s.set_state(BallState.waiting_for_question)
         await c.answer()
     await check_and_run(cb, state, "ball", _exec)
@@ -467,7 +529,7 @@ async def compat_menu(cb: types.CallbackQuery, state: FSMContext):
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): return
-        await c.message.answer("💕 Введи знак партнёра (Телец, Лев...):", reply_markup=get_bottom_menu())
+        await c.message.answer("💕 Введи знак партнёра (Телец, Лев...):")
         await s.set_state(CompatState.waiting_for_partner_sign)
         await c.answer()
     await check_and_run(cb, state, "compat", _exec)
@@ -483,6 +545,7 @@ async def week_forecast(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты профессиональный астролог.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, ans + get_shadow("week"))
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "week", _exec)
 
@@ -497,6 +560,7 @@ async def numerology(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты нумеролог.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "numerology", _exec)
 
@@ -512,6 +576,7 @@ async def rune_divination(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты эксперт по рунам.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "rune", _exec)
 
@@ -526,6 +591,7 @@ async def tarot(cb: types.CallbackQuery, state: FSMContext):
         card = random.choice(TAROT_CARDS)
         text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
         await send_pred(c.message, text)
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "tarot", _exec)
 
@@ -544,6 +610,7 @@ async def vedana_pred(cb: types.CallbackQuery, state: FSMContext):
         if not user['is_premium']:
             use_vedana_credit(user['telegram_id'])
         await send_pred(c.message, ans)
+        await send_commands_hint(c.message)
         await c.answer()
     await check_and_run(cb, state, "vedana_pred", _exec)
 
@@ -551,7 +618,7 @@ async def vedana_pred(cb: types.CallbackQuery, state: FSMContext):
 @dp.message(NatalState.waiting_for_time)
 async def natal_time(msg: types.Message, state: FSMContext):
     await state.update_data(time=msg.text.strip())
-    await msg.answer("📍 Место рождения (Город):", reply_markup=get_bottom_menu())
+    await msg.answer("📍 Место рождения (Город):")
     await state.set_state(NatalState.waiting_for_place)
 
 @dp.message(NatalState.waiting_for_place)
@@ -567,6 +634,7 @@ async def natal_place(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt, "Ты астролог-наталог.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("natal"))
+    await send_commands_hint(msg)
     await state.clear()
 
 @dp.message(BallState.waiting_for_question)
@@ -581,6 +649,7 @@ async def ball_question(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt, "Ты магический шар.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("ball"))
+    await send_commands_hint(msg)
     await state.clear()
 
 @dp.message(CompatState.waiting_for_partner_sign)
@@ -595,6 +664,7 @@ async def compat_partner(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("compat"))
+    await send_commands_hint(msg)
     await state.clear()
 
 # ================= ОБРАБОТЧИКИ ДЛЯ КНОПОК БЕЗ ОНБОРДИНГА =================
@@ -611,6 +681,7 @@ async def main_menu_cb(cb: types.CallbackQuery):
             await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
         except:
             await cb.message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
+        await send_commands_hint(cb.message)
     await cb.answer()
 
 @dp.callback_query(F.data == "shop")
@@ -624,7 +695,7 @@ async def shop_cb(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data == "edit")
 async def edit(cb: types.CallbackQuery):
-    await cb.message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):", reply_markup=get_bottom_menu())
+    await cb.message.answer("✏️ Новая дата (ДД.ММ.ГГГГ):")
     await cb.answer()
     @dp.message(F.text)
     async def save_edit(msg: types.Message, st: FSMContext):
@@ -633,8 +704,9 @@ async def edit(cb: types.CallbackQuery):
             zodiac = calculate_zodiac(msg.text.strip())
             add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
             await msg.answer("✅ Дата обновлена!", reply_markup=get_menu_grid(get_user(msg.from_user.id)))
+            await send_commands_hint(msg)
         except:
-            await msg.answer("❌ Неверно", reply_markup=get_bottom_menu())
+            await msg.answer("❌ Неверно")
         await st.clear()
 
 @dp.callback_query(F.data == "invite")
@@ -645,8 +717,7 @@ async def invite_friend(cb: types.CallbackQuery):
         f"👥 Твоя реферальная ссылка:\n{link}\n\n"
         f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
         f"ты получишь +5 бесплатных прогнозов.\n\n"
-        f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!",
-        reply_markup=get_bottom_menu()
+        f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!"
     )
     await cb.answer()
 
@@ -738,6 +809,7 @@ async def pay_success(msg: types.Message):
         add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
         user = get_user(msg.from_user.id)
         await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", reply_markup=get_menu_grid(user))
+        await send_commands_hint(msg)
 
 # ================= ЗАПУСК =================
 async def on_startup(bot: Bot):
