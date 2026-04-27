@@ -1,12 +1,3 @@
-Проблема в том, что в ваш файл `bot.py` снова попал **текст из моего объяснения** (строка 254: `{"name": "⭐ Звезда (Проблема в том...`). Python не может выполнить этот текст как код.
-
-Кроме того, ошибка `RuntimeError: This method is not mounted to a any bot instance` возникает потому, что внутри вложенных функций (`_exec`) переменная `c` (callback query) не имеет доступа к объекту `bot`. В aiogram 3.x с вебхуками нужно вызывать методы через глобальный объект `bot`.
-
-Ниже — **полностью очищенный и исправленный код**. Я удалил весь лишний текст и исправил вызовы `.answer()`, заменив их на `await bot.answer_callback_query(...)` или используя глобальный `bot` для отправки сообщений, чтобы избежать ошибок монтирования.
-
-### 📂 Файл: `bot.py` (Чистый, рабочий, без ошибок синтаксиса и RuntimeErrors)
-
-```python
 import asyncio
 import logging
 import os
@@ -470,7 +461,6 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     await send_commands_hint(message)
 
     if target_action:
-        # Создаем фейковый колбэк для вызова обработчиков
         fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
         if target_action == "horoscope":
             await horoscope(fake_cb, state)
@@ -868,4 +858,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("🛑 Бот остановлен")
-```
