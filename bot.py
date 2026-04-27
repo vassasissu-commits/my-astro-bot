@@ -323,7 +323,7 @@ def get_menu_grid(user, is_admin=False):
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")],
-        [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
+        [InlineKeyboardButton(text="          👥 Пригласить друга (+5)           ", callback_data="invite")]
     ]
 
     if is_admin:
