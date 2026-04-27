@@ -208,6 +208,216 @@ PROMPT_VEDANA = """
 Тон: авторитетный, мягкий. Без общих фраз. 200-300 слов.
 """
 
+import asyncio
+import logging
+import os
+import sqlite3
+import random
+import aiohttp
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
+
+# ================= НАСТРОЙКИ =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PORT = int(os.getenv("PORT", 8080))
+ADMIN_USERNAME = "Rusfer1"
+WEBHOOK_URL = f"https://my-astro-bot-wqwl.onrender.com/webhook"
+
+if not BOT_TOKEN or not GROQ_API_KEY:
+    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
+    exit(1)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+DB_NAME = "astro_users.db"
+
+# ================= FSM =================
+class OnboardingState(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_birthdate = State()
+
+class NatalState(StatesGroup):
+    waiting_for_time = State()
+    waiting_for_place = State()
+
+class BallState(StatesGroup):
+    waiting_for_question = State()
+
+class CompatState(StatesGroup):
+    waiting_for_partner_sign = State()
+
+# ================= БАЗА ДАННЫХ =================
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        telegram_id INTEGER UNIQUE,
+        name TEXT,
+        birth_date TEXT,
+        zodiac TEXT,
+        free_credits INTEGER DEFAULT 3,
+        vedana_credits INTEGER DEFAULT 0,
+        last_reset_date TEXT,
+        is_premium INTEGER DEFAULT 0
+    )''')
+    conn.commit()
+    conn.close()
+
+def get_user(tid):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
+    conn.close()
+    if user:
+        user = dict(user)
+        today = datetime.now().strftime("%Y-%m-%d")
+        if user['last_reset_date'] != today and not user['is_premium']:
+            conn = sqlite3.connect(DB_NAME)
+            conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
+            conn.commit()
+            conn.close()
+            user['free_credits'] = 3
+            user['last_reset_date'] = today
+        return user
+    return None
+
+def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
+    conn = sqlite3.connect(DB_NAME)
+    today = datetime.now().strftime("%Y-%m-%d")
+    user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
+    if not user:
+        conn.execute("""INSERT INTO users 
+            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium)
+            VALUES (?, ?, ?, ?, 3, 0, ?, 0)""",
+            (tid, name, birth_date, zodiac, today))
+    else:
+        conn.execute("""UPDATE users SET 
+            name=COALESCE(?, name), birth_date=COALESCE(?, birth_date),
+            zodiac=COALESCE(?, zodiac) WHERE telegram_id=?""",
+            (name, birth_date, zodiac, tid))
+    conn.commit()
+    conn.close()
+
+def use_free_credit(tid):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
+    conn.commit()
+    conn.close()
+
+def use_vedana_credit(tid):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE users SET vedana_credits = vedana_credits - 1 WHERE telegram_id=?", (tid,))
+    conn.commit()
+    conn.close()
+
+def add_credits(tid, free_amt=0, vedana_amt=0, set_prem=False):
+    conn = sqlite3.connect(DB_NAME)
+    if set_prem:
+        conn.execute("UPDATE users SET is_premium=1, vedana_credits = vedana_credits + ? WHERE telegram_id=?", (vedana_amt, tid))
+    else:
+        conn.execute("UPDATE users SET free_credits = free_credits + ?, vedana_credits = vedana_credits + ? WHERE telegram_id=?",
+                     (free_amt, vedana_amt, tid))
+    conn.commit()
+    conn.close()
+
+def add_referrer_bonus(ref_user_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("UPDATE users SET free_credits = free_credits + 5 WHERE telegram_id = ?", (ref_user_id,))
+    conn.commit()
+    conn.close()
+    logging.info(f"Реферер {ref_user_id} получил +5 кредитов")
+
+# ================= GROQ AI =================
+async def ask_groq(prompt, system_prompt):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                    "max_tokens": 800,
+                    "temperature": 0.7
+                }
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data['choices'][0]['message']['content']
+                return f"❌ Ошибка AI: {resp.status}"
+    except Exception as e:
+        return f"❌ Ошибка: {e}"
+
+# ================= ПРОМПТЫ =================
+PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом.
+Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
+СТРУКТУРА:
+🌙 Гороскоп для {name} на {date}
+⭐ Энергетика дня
+💼 Карьера/финансы
+❤️ Отношения
+💡 Совет
+Пиши конкретно. Длина: 150-250 слов."""
+
+PROMPT_NATAL = """Ты профессиональный астролог-наталог.
+Составь НАТАЛЬНУЮ КАРТУ для:
+Дата: {birth_date}, Время: {time}, Место: {place}
+СТРУКТУРА:
+🌌 Натальная карта
+♈ Асцендент и Солнечный знак
+🌙 Луна и эмоции
+💫 Ключевые аспекты
+🎯 Сильные стороны
+⚠️ Зоны роста
+Длина: 200-300 слов."""
+
+PROMPT_COMPAT = """Ты астролог-эксперт по совместимости.
+Рассчитай СОВМЕСТИМОСТЬ: {sign1} и {sign2}.
+СТРУКТУРА:
+💕 Совместимость
+🔥 Общая вибрация
+✅ Сильные стороны
+⚠️ Зоны риска
+💡 Совет
+Длина: 150-200 слов."""
+
+PROMPT_BALL = """Ты — магический шар Веданы. Отвечай мистически, но конкретно.
+Вопрос: {q}
+Знак: {sign}
+Формат:
+🔮 Магический шар ответил:
+[Ответ 2-3 предложения]
+💡 Совет шара: [1 предложение]"""
+
+PROMPT_WEEK = """Ты профессиональный астролог.
+Составь ПРОГНОЗ НА НЕДЕЛЮ для {sign}.
+СТРУКТУРА:
+📅 Прогноз на неделю
+✨ Общая тема
+💼 Карьера
+❤️ Отношения
+💡 Совет
+Длина: 150-200 слов."""
+
+PROMPT_VEDANA = """
+Ты — Ведана, мудрый астролог с 20-летним стажем. Ты видишь людей насквозь.
+ДАННЫЕ: Имя: {name}, Знак: {sign}, Дата: {birth_date}
+ПРОВЕДИ ЛИЧНУЮ КОНСУЛЬТАЦИЮ:
+👁️ Взгляд в душу (обрати к имени, опиши суть и текущую энергию)
+🔮 Карта судьбы (3 сферы: Любовь, Карьера, Рост + астротермины)
+🕯️ Тайное послание (короткая мудрость)
+✨ Совет от Веданы (практика: цвет, камень, действие)
+Тон: авторитетный, мягкий. Без общих фраз. 200-300 слов.
+"""
+
 PROMPT_RUNE = """Ты — эксперт по рунам. Выпала руна {rune_name}.
 Дай толкование для человека со знаком {sign}.
 СТРУКТУРА:
@@ -310,14 +520,19 @@ def get_menu_grid(user, is_admin=False):
     
     # Длинные названия для расширения кнопок
     vedana_text = f"🔮 Личный прогноз от Веданы\n({vedana_c} вед)"
+    
+    # Невидимая кнопка-разделитель
+    spacer = InlineKeyboardButton(text=" ", callback_data="noop")
 
     menu_kb = [
         [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        [spacer],
         [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
          InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
         [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
          InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
+        [spacer],
         [InlineKeyboardButton(text="🔢 Нумерология даты", callback_data="numerology"),
          InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
@@ -332,7 +547,6 @@ def get_menu_grid(user, is_admin=False):
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
 
 async def send_commands_hint(message: types.Message):
-    """Отправляет текстовую подсказку с командами (как у конкурентов)"""
     await message.answer("/start Запустить (если бот не отвечает)\n/menu Главное меню")
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
