@@ -303,33 +303,61 @@ def get_shop_kb():
     ])
 
 def get_menu_grid(user, is_admin=False):
-    name = user.get('name') if user.get('name') else "гость"
-    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
-    vedana_c = user['vedana_credits']
-    vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
+    # Формируем текст баланса
+    free_txt = "∞" if user['is_premium'] else f"{user['free_credits']}/3"
+    vedana_count = user['vedana_credits']
+    vedana_label = f"🔮 Ведана ({vedana_count})" if not user['is_premium'] else "🔮 Ведана (∞)"
     
-    # Длинные названия для расширения кнопок
-    vedana_text = f"🔮 Личный прогноз от Веданы\n({vedana_c} вед)"
-
-    menu_kb = [
-        [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
-         InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
-        [InlineKeyboardButton(text="🔢 Нумерология даты", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
-        [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
-        [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")],
-        [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
+    # Неразрывные пробелы для расширения кнопок (4 штуки)
+    spacer = "\u00A0" * 4  # U+00A0 — неразрывный пробел
+    
+    # Собираем клавиатуру: строки с одной или двумя кнопками
+    keyboard = [
+        # Две кнопки в строке
+        [
+            InlineKeyboardButton(text=f"🌟 Гороскоп{spacer}", callback_data="horoscope"),
+            InlineKeyboardButton(text=f"🌌 Натальная карта{spacer}", callback_data="natal")
+        ],
+        [
+            InlineKeyboardButton(text=f"🃏 Таро{spacer}", callback_data="tarot"),
+            InlineKeyboardButton(text=f"💕 Совместимость{spacer}", callback_data="compat")
+        ],
+        [
+            InlineKeyboardButton(text=f"🔮 Магический шар{spacer}", callback_data="ball"),
+            InlineKeyboardButton(text=f"ᚠ Руны{spacer}", callback_data="rune")
+        ],
+        # Одиночные кнопки на всю строку
+        [
+            InlineKeyboardButton(text=f"🔢 Нумерология{spacer}", callback_data="numerology")
+        ],
+        [
+            InlineKeyboardButton(text=f"📅 Прогноз на неделю{spacer}", callback_data="week")
+        ],
+        # Информационная строка (кнопка без действия)
+        [
+            InlineKeyboardButton(text=f"📊 Бесплатных прогнозов: {free_txt}", callback_data="noop")
+        ],
+        # Ведана
+        [
+            InlineKeyboardButton(
+                text=f"{vedana_label}{spacer}",
+                callback_data="vedana_pred" if (vedana_count > 0 or user['is_premium']) else "shop"
+            )
+        ],
+        [
+            InlineKeyboardButton(text=f"✏️ Изменить дату рождения{spacer}", callback_data="edit")
+        ],
+        [
+            InlineKeyboardButton(text=f"👥 Пригласить друга (+5 прогнозов){spacer}", callback_data="invite")
+        ]
     ]
-
+    
     if is_admin:
-        menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
-
-    return InlineKeyboardMarkup(inline_keyboard=menu_kb)
+        keyboard.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
+    
+    keyboard.append([InlineKeyboardButton(text="🛒 Магазин предсказаний", callback_data="shop")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 async def send_commands_hint(message: types.Message):
     await message.answer("/start Запустить (если бот не отвечает)\n/menu Главное меню")
