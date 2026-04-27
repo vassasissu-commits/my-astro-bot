@@ -315,23 +315,23 @@ def get_menu_grid(user, is_admin=False):
     keyboard = [
         # Две кнопки в строке
         [
-            InlineKeyboardButton(text=f"🌟 Гороскоп{spacer}", callback_data="horoscope"),
-            InlineKeyboardButton(text=f"🌌 Натальная карта{spacer}", callback_data="natal")
+            InlineKeyboardButton(text=f"     🌟 Гороскоп{spacer}    "    , callback_data="horoscope"),
+            InlineKeyboardButton(text=f"    🌌 Натальная карта    {spacer}", callback_data="natal")
         ],
         [
-            InlineKeyboardButton(text=f"🃏 Таро{spacer}", callback_data="tarot"),
+            InlineKeyboardButton(text=f   "🃏Таро{spacer}"   , callback_data="tarot"),
             InlineKeyboardButton(text=f"💕 Совместимость{spacer}", callback_data="compat")
         ],
         [
-            InlineKeyboardButton(text=f"🔮 Магический шар{spacer}", callback_data="ball"),
+            InlineKeyboardButton(text=f"🔮    Магический шар   {spacer}  ", callback_data="ball"),
             InlineKeyboardButton(text=f"ᚠ Руны{spacer}", callback_data="rune")
         ],
         # Одиночные кнопки на всю строку
         [
-            InlineKeyboardButton(text=f"🔢 Нумерология{spacer}", callback_data="numerology")
+            InlineKeyboardButton(text=f"   🔢 Нумерология   {spacer}", callback_data="numerology")
         ],
         [
-            InlineKeyboardButton(text=f"📅 Прогноз на неделю{spacer}", callback_data="week")
+            InlineKeyboardButton(text=    f"📅 Прогноз на неделю{spacer}"   , callback_data="week")
         ],
         # Информационная строка (кнопка без действия)
         [
