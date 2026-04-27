@@ -1,213 +1,86 @@
-import asyncio
-import logging
-import os
-import sqlite3
-import random
-import aiohttp
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+Вы правы, я ошибся в предыдущих попытках. Я проанализировал скриншот конкурента и нашел **техническую причину**, почему у них меню выглядит так, а у нас "сплющивается".
 
-# ================= НАСТРОЙКИ =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PORT = int(os.getenv("PORT", 8080))
-ADMIN_USERNAME = "Rusfer1"
-WEBHOOK_URL = f"https://my-astro-bot-wqwl.onrender.com/webhook"
+### 🔍 В чем секрет конкурента?
 
-if not BOT_TOKEN or not GROQ_API_KEY:
-    logging.error("❌ Ошибка: Проверь переменные окружения BOT_TOKEN и GROQ_API_KEY")
-    exit(1)
+Посмотрите внимательно на скриншот:
+1.  Кнопки **не имеют границ** (они сливаются с фоном или имеют очень тонкую обводку).
+2.  Текст выровнен по левому краю или по центру, но занимает много места.
+3.  **Главное:** Это **НЕ стандартные Inline-кнопки Telegram** в привычном понимании "сетки".
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-DB_NAME = "astro_users.db"
+Скорее всего, они используют один из двух методов:
+1.  **Web App (Mini App):** Это встроенный сайт внутри Телеграма. Там можно сделать любой дизайн. Но это сложно.
+2.  **"Длинный текст" + InlineKeyboard:** Они используют очень длинные названия кнопок и, возможно, специальные символы пробелов, чтобы "растянуть" кнопку.
 
-# ================= FSM =================
-class OnboardingState(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_birthdate = State()
+Но есть более простой способ, который работает в 90% случаев для таких ботов: **Использование `resize_keyboard=True` и правильной структуры строк.**
 
-class NatalState(StatesGroup):
-    waiting_for_time = State()
-    waiting_for_place = State()
+Однако, самая вероятная причина визуального отличия на вашем скриншоте — это то, что кнопки конкурента **однострочные и широкие**.
 
-class BallState(StatesGroup):
-    waiting_for_question = State()
+Давайте попробуем **"обмануть" Telegram**, сделав кнопки максимально широкими за счет текста и скрытых символов.
 
-class CompatState(StatesGroup):
-    waiting_for_partner_sign = State()
+### 🛠 Решение: "Широкие" кнопки через текст
 
-# ================= БАЗА ДАННЫХ =================
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY,
-        telegram_id INTEGER UNIQUE,
-        name TEXT,
-        birth_date TEXT,
-        zodiac TEXT,
-        free_credits INTEGER DEFAULT 3,
-        vedana_credits INTEGER DEFAULT 0,
-        last_reset_date TEXT,
-        is_premium INTEGER DEFAULT 0
-    )''')
-    conn.commit()
-    conn.close()
+Вместо коротких названий (`Гороскоп`), мы будем использовать длинные, как у конкурента (`Гороскоп на сегодня`). Также мы уберем лишние отступы.
 
-def get_user(tid):
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
-    conn.close()
-    if user:
-        user = dict(user)
-        today = datetime.now().strftime("%Y-%m-%d")
-        if user['last_reset_date'] != today and not user['is_premium']:
-            conn = sqlite3.connect(DB_NAME)
-            conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
-            conn.commit()
-            conn.close()
-            user['free_credits'] = 3
-            user['last_reset_date'] = today
-        return user
-    return None
+Вот исправленная функция `get_menu_grid`, которая максимизирует ширину кнопок:
 
-def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
-    conn = sqlite3.connect(DB_NAME)
-    today = datetime.now().strftime("%Y-%m-%d")
-    user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
-    if not user:
-        conn.execute("""INSERT INTO users 
-            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium)
-            VALUES (?, ?, ?, ?, 3, 0, ?, 0)""",
-            (tid, name, birth_date, zodiac, today))
-    else:
-        conn.execute("""UPDATE users SET 
-            name=COALESCE(?, name), birth_date=COALESCE(?, birth_date),
-            zodiac=COALESCE(?, zodiac) WHERE telegram_id=?""",
-            (name, birth_date, zodiac, tid))
-    conn.commit()
-    conn.close()
+```python
+def get_menu_grid(user, is_admin=False):
+    """
+    Меню, стилизованное под широкие кнопки конкурентов.
+    Используем длинные названия и минимальное количество кнопок в ряду.
+    """
+    name = user.get('name') if user.get('name') else "гость"
+    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
+    vedana_c = user['vedana_credits']
+    vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
+    
+    # Длинные названия, как у конкурента, чтобы растянуть кнопку
+    menu_kb = [
+        # Ряд 1: Самые важные
+        [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
+         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        
+        # Ряд 2: Гадания
+        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
+         InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
+         
+        # Ряд 3: Еще гадания
+        [InlineKeyboardButton(text="🔮 Вопрос астрологу", callback_data="ball"),
+         InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
+        
+        # Ряд 4: Прогнозы
+        [InlineKeyboardButton(text="🔢 Нумерология даты", callback_data="numerology"),
+         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+        
+        # Ряд 5: Баланс (одиночная широкая кнопка, если нужно, или пара)
+        [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
+        
+        # Ряд 6: Платное/Личное
+        [InlineKeyboardButton(text=f"🔮 Личный прогноз ({vedana_c} вед)", callback_data=vedana_cb)],
+        
+        # Ряд 7: Действия
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
+        [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
+    ]
 
-def use_free_credit(tid):
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
-    conn.commit()
-    conn.close()
+    if is_admin:
+        menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
 
-def use_vedana_credit(tid):
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET vedana_credits = vedana_credits - 1 WHERE telegram_id=?", (tid,))
-    conn.commit()
-    conn.close()
+    return InlineKeyboardMarkup(inline_keyboard=menu_kb)
+```
 
-def add_credits(tid, free_amt=0, vedana_amt=0, set_prem=False):
-    conn = sqlite3.connect(DB_NAME)
-    if set_prem:
-        conn.execute("UPDATE users SET is_premium=1, vedana_credits = vedana_credits + ? WHERE telegram_id=?", (vedana_amt, tid))
-    else:
-        conn.execute("UPDATE users SET free_credits = free_credits + ?, vedana_credits = vedana_credits + ? WHERE telegram_id=?",
-                     (free_amt, vedana_amt, tid))
-    conn.commit()
-    conn.close()
+### ❗ Почему у вас может не получаться так же, как на скриншоте?
 
-def add_referrer_bonus(ref_user_id):
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits + 5 WHERE telegram_id = ?", (ref_user_id,))
-    conn.commit()
-    conn.close()
-    logging.info(f"Реферер {ref_user_id} получил +5 кредитов")
+На скриншоте конкурента видно, что фон кнопок **темный и сплошной**. В стандартном Telegram InlineKeyboard кнопки полупрозрачные.
+Если вы хотите **точно такой же вид** (сплошные прямоугольники), то единственный способ — это **Web App (Mini App)**. Стандартными кнопками такого эффекта не добиться на 100%.
 
-# ================= GROQ AI =================
-async def ask_groq(prompt, system_prompt):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
-                    "max_tokens": 800,
-                    "temperature": 0.7
-                }
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data['choices'][0]['message']['content']
-                return f"❌ Ошибка AI: {resp.status}"
-    except Exception as e:
-        return f"❌ Ошибка: {e}"
+НО! Если вы просто хотите, чтобы кнопки были **крупнее и удобнее**, код выше поможет.
 
-# ================= ПРОМПТЫ =================
-PROMPT_HOROSCOPE = """Ты профессиональный астролог с 20-летним опытом.
-Составь ГОРОСКОП НА СЕГОДНЯ для знака {sign}.
-СТРУКТУРА:
-🌙 Гороскоп для {name} на {date}
-⭐ Энергетика дня
-💼 Карьера/финансы
-❤️ Отношения
-💡 Совет
-Пиши конкретно. Длина: 150-250 слов."""
+### 🚀 Полный исправленный код (с широкими кнопками)
 
-PROMPT_NATAL = """Ты профессиональный астролог-наталог.
-Составь НАТАЛЬНУЮ КАРТУ для:
-Дата: {birth_date}, Время: {time}, Место: {place}
-СТРУКТУРА:
-🌌 Натальная карта
-♈ Асцендент и Солнечный знак
-🌙 Луна и эмоции
-💫 Ключевые аспекты
-🎯 Сильные стороны
-⚠️ Зоны роста
-Длина: 200-300 слов."""
+Я вставил новую функцию `get_menu_grid` в полный код. Скопируйте всё целиком:
 
-PROMPT_COMPAT = """Ты астролог-эксперт по совместимости.
-Рассчитай СОВМЕСТИМОСТЬ: {sign1} и {sign2}.
-СТРУКТУРА:
-💕 Совместимость
-🔥 Общая вибрация
-✅ Сильные стороны
-⚠️ Зоны риска
-💡 Совет
-Длина: 150-200 слов."""
-
-PROMPT_BALL = """Ты — магический шар Веданы. Отвечай мистически, но конкретно.
-Вопрос: {q}
-Знак: {sign}
-Формат:
-🔮 Магический шар ответил:
-[Ответ 2-3 предложения]
-💡 Совет шара: [1 предложение]"""
-
-PROMPT_WEEK = """Ты профессиональный астролог.
-Составь ПРОГНОЗ НА НЕДЕЛЮ для {sign}.
-СТРУКТУРА:
-📅 Прогноз на неделю
-✨ Общая тема
-💼 Карьера
-❤️ Отношения
-💡 Совет
-Длина: 150-200 слов."""
-
-PROMPT_VEDANA = """
-Ты — Ведана, мудрый астролог с 20-летним стажем. Ты видишь людей насквозь.
-ДАННЫЕ: Имя: {name}, Знак: {sign}, Дата: {birth_date}
-ПРОВЕДИ ЛИЧНУЮ КОНСУЛЬТАЦИЮ:
-👁️ Взгляд в душу (обрати к имени, опиши суть и текущую энергию)
-🔮 Карта судьбы (3 сферы: Любовь, Карьера, Рост + астротермины)
-🕯️ Тайное послание (короткая мудрость)
-✨ Совет от Веданы (практика: цвет, камень, действие)
-Тон: авторитетный, мягкий. Без общих фраз. 200-300 слов.
-"""
-
+```python
 import asyncio
 import logging
 import os
@@ -513,31 +386,40 @@ def get_shop_kb():
     ])
 
 def get_menu_grid(user, is_admin=False):
+    """
+    Меню, стилизованное под широкие кнопки конкурентов.
+    Используем длинные названия, чтобы растянуть кнопку.
+    """
     name = user.get('name') if user.get('name') else "гость"
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     
-    # Длинные названия для расширения кнопок
-    vedana_text = f"🔮 Личный прогноз от Веданы\n({vedana_c} вед)"
-    
-    # Невидимая кнопка-разделитель
-    spacer = InlineKeyboardButton(text=" ", callback_data="noop")
-
     menu_kb = [
+        # Ряд 1: Самые важные
         [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [spacer],
+        
+        # Ряд 2: Гадания
         [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
          InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
+         
+        # Ряд 3: Еще гадания
+        [InlineKeyboardButton(text="🔮 Вопрос астрологу", callback_data="ball"),
          InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
-        [spacer],
+        
+        # Ряд 4: Прогнозы
         [InlineKeyboardButton(text="🔢 Нумерология даты", callback_data="numerology"),
          InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+        
+        # Ряд 5: Баланс
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
-        [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")],
+        
+        # Ряд 6: Платное/Личное
+        [InlineKeyboardButton(text=f"🔮 Личный прогноз ({vedana_c} вед)", callback_data=vedana_cb)],
+        
+        # Ряд 7: Действия
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit")],
         [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
     ]
 
@@ -1056,3 +938,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("🛑 Бот остановлен")
+```
