@@ -44,9 +44,10 @@ class BallState(StatesGroup):
 class CompatState(StatesGroup):
     waiting_for_partner_sign = State()
 
-# ================= БАЗА ДАННЫХ =================
+# ================= БАЗА ДАННЫХ И ЛОГИРОВАНИЕ =================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
+    # Таблица пользователей
     conn.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY,
         telegram_id INTEGER UNIQUE,
@@ -58,8 +59,30 @@ def init_db():
         last_reset_date TEXT,
         is_premium INTEGER DEFAULT 0
     )''')
+    
+    # Таблица логов действий (аналитика)
+    conn.execute('''CREATE TABLE IF NOT EXISTS user_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER,
+        action TEXT,
+        details TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
     conn.commit()
     conn.close()
+
+def log_action(tid, action, details=""):
+    """Записывает действие пользователя в базу для аналитики"""
+    conn = sqlite3.connect(DB_NAME)
+    try:
+        conn.execute("INSERT INTO user_logs (telegram_id, action, details) VALUES (?, ?, ?)", 
+                     (tid, action, details))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Ошибка логирования: {e}")
+    finally:
+        conn.close()
 
 def get_user(tid):
     conn = sqlite3.connect(DB_NAME)
@@ -322,13 +345,16 @@ def get_menu_grid(user, is_admin=False):
          InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="...........                ✏️ Изменить дату рождения                  ..............", callback_data="edit")],
-        [InlineKeyboardButton(text=      "//////              👥 Пригласить друга (+5)            //////" \
-        "     "        , callback_data="invite")]
+        [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")],
+        [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
     ]
 
     if is_admin:
-        menu_kb.append([InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")])
+        # Добавляем кнопку статистики для админа
+        menu_kb.append([
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+            InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")
+        ])
 
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
 
@@ -379,6 +405,11 @@ async def send_pred(msg, text):
 @dp.message(F.text == "/start")
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
+    tid = message.from_user.id
+    
+    # Логируем вход
+    log_action(tid, "start_bot", f"Username: @{message.from_user.username}")
+    
     args = message.text.split()
     start_param = None
     if len(args) > 1:
@@ -387,7 +418,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if start_param and start_param.startswith("ref_"):
         try:
             ref_id = int(start_param.split("_")[1])
-            if ref_id != message.from_user.id:
+            if ref_id != tid:
                 ref_user = get_user(ref_id)
                 if ref_user:
                     add_referrer_bonus(ref_id)
@@ -395,12 +426,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
         except:
             pass
     elif start_param:
-        logging.info(f"Переход из источника: {start_param} от user {message.from_user.id}")
+        logging.info(f"Переход из источника: {start_param} от user {tid}")
 
-    if not get_user(message.from_user.id):
-        add_or_update_user(message.from_user.id)
+    if not get_user(tid):
+        add_or_update_user(tid)
 
-    user = get_user(message.from_user.id)
+    user = get_user(tid)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
     caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
 
@@ -434,8 +465,13 @@ async def start_onboarding(callback: types.CallbackQuery, state: FSMContext, tar
 
 @dp.message(OnboardingState.waiting_for_name)
 async def onboarding_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text.strip())
-    await message.answer(f"✨ {message.text.strip()}!\n\n📅 Теперь дату рождения (ДД.ММ.ГГГГ):")
+    name = message.text.strip()
+    await state.update_data(name=name)
+    
+    # Логируем ввод имени
+    log_action(message.from_user.id, "name_entered", f"Name: {name}")
+    
+    await message.answer(f"✨ {name}!\n\n📅 Теперь дату рождения (ДД.ММ.ГГГГ):")
     await state.set_state(OnboardingState.waiting_for_birthdate)
 
 @dp.message(OnboardingState.waiting_for_birthdate)
@@ -450,6 +486,10 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     birth = message.text.strip()
     zodiac = calculate_zodiac(birth)
     add_or_update_user(message.from_user.id, name, birth, zodiac)
+    
+    # Логируем завершение регистрации
+    log_action(message.from_user.id, "registration_complete", f"Zodiac: {zodiac}, Name: {name}")
+    
     target_action = data.get('target_action')
     await state.clear()
     user = get_user(message.from_user.id)
@@ -492,6 +532,9 @@ async def check_and_run(callback: types.CallbackQuery, state: FSMContext, action
 
 @dp.callback_query(F.data == "horoscope")
 async def horoscope(cb: types.CallbackQuery, state: FSMContext):
+    # Логируем клик
+    log_action(cb.from_user.id, "click_horoscope", "")
+    
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -509,6 +552,7 @@ async def horoscope(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "natal")
 async def natal(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_natal", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -522,6 +566,7 @@ async def natal(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "ball")
 async def ball_menu(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_ball", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -534,6 +579,7 @@ async def ball_menu(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "compat")
 async def compat_menu(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_compat", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -546,6 +592,7 @@ async def compat_menu(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "week")
 async def week_forecast(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_week", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -563,6 +610,7 @@ async def week_forecast(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "numerology")
 async def numerology(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_numerology", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -580,6 +628,7 @@ async def numerology(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "rune")
 async def rune_divination(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_rune", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -598,6 +647,7 @@ async def rune_divination(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "tarot")
 async def tarot(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_tarot", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if not check_free(user, c.message): 
@@ -615,6 +665,7 @@ async def tarot(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "vedana_pred")
 async def vedana_pred(cb: types.CallbackQuery, state: FSMContext):
+    log_action(cb.from_user.id, "click_vedana", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
         if user['vedana_credits'] <= 0 and not user['is_premium']:
@@ -739,6 +790,36 @@ async def invite_friend(cb: types.CallbackQuery):
         f"ты получишь +5 бесплатных прогнозов.\n\n"
         f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!"
     )
+    await bot.answer_callback_query(cb.id)
+
+# ================= АДМИН ПАНЕЛЬ И СТАТИСТИКА =================
+@dp.callback_query(F.data == "admin_stats")
+async def show_stats(cb: types.CallbackQuery):
+    if cb.from_user.username != ADMIN_USERNAME:
+        await bot.answer_callback_query(cb.id, text="🔒 Доступ запрещён", show_alert=True)
+        return
+        
+    conn = sqlite3.connect(DB_NAME)
+    
+    # Считаем сколько раз вводили имя
+    count_names = conn.execute("SELECT COUNT(*) FROM user_logs WHERE action='name_entered'").fetchone()[0]
+    
+    # Считаем сколько раз завершили регистрацию
+    count_reg = conn.execute("SELECT COUNT(*) FROM user_logs WHERE action='registration_complete'").fetchone()[0]
+    
+    # Последние 5 действий
+    recent_logs = conn.execute("SELECT telegram_id, action, timestamp FROM user_logs ORDER BY id DESC LIMIT 5").fetchall()
+    
+    conn.close()
+    
+    text = f"📊 Статистика активности:\n"
+    text += f"Имен введено: {count_names}\n"
+    text += f"Регистраций завершено: {count_reg}\n\n"
+    text += "Последние действия:\n"
+    for log in recent_logs:
+        text += f"User {log[0]}: {log[1]} ({log[2]})\n"
+        
+    await cb.message.answer(text)
     await bot.answer_callback_query(cb.id)
 
 @dp.callback_query(F.data == "admin_panel")
