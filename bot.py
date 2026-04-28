@@ -338,7 +338,7 @@ RUNES = [
     {"name": "ᛟ Одал", "desc": "Наследие, дом, корни"}
 ]
 
-# ================= КЛАВИАТУРЫ (СОКРАЩЕННЫЕ ДЛЯ КНОПОК) =================
+# ================= КЛАВИАТУРЫ =================
 def get_bonus_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Ежедневные 3 прогноза", callback_data="bonus_daily")],
@@ -369,11 +369,9 @@ def get_menu_grid(user, is_admin=False):
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     vedana_text = f"🔮 Личный прогноз ({vedana_c} вед)"
 
-    # Самая широкая кнопка (одна в ряду)
-    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ", callback_data="bonus_menu")]
-
+    # Кнопки меню
     menu_kb = [
-        bonus_btn,
+        [InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus_menu")],
         [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
         [InlineKeyboardButton(text="🃏 Таро на отношения", callback_data="tarot"),
@@ -423,7 +421,7 @@ def calculate_zodiac(birth_date):
 
 def check_free(user, msg):
     if not user['is_premium'] and user['free_credits'] <= 0:
-        asyncio.create_task(msg.answer("❌ Прогнозы закончились. Нажмите '🎁 АКТИВИРОВАТЬ...' в меню!"))
+        asyncio.create_task(msg.answer("❌ Прогнозы закончились. Нажмите '🎁 Забрать бонус' в меню!"))
         return False
     return True
 
@@ -464,7 +462,21 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     user = get_user(tid)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
-    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+    
+    # === НОВОЕ ПРИВЕТСТВИЕ ===
+    name = user.get('name', '')
+    greeting_name = f", {name}" if name else ""
+    
+    caption = (
+        f"🌙 Привет{greeting_name}. Я — Ведана, твой астролог.\n\n"
+        f"✨ У тебя уже есть 3 бесплатных прогноза на сегодня.\n"
+        f"Выбери, что хочешь узнать:\n"
+        f"• Гороскоп на сегодня\n"
+        f"• Совместимость с партнёром\n"
+        f"• Расклад Таро\n\n"
+        f"🔮 А если захочешь заглянуть глубже – есть тайные предсказания (индивидуальная консультация).\n\n"
+        f"👇 Начни с кнопки ниже."
+    )
 
     try:
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
@@ -480,7 +492,22 @@ async def cmd_menu(message: types.Message, state: FSMContext):
         await cmd_start(message, state)
         return
     is_admin = (message.from_user.username == ADMIN_USERNAME)
-    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+    
+    # === НОВОЕ ПРИВЕТСТВИЕ ДЛЯ /menu ===
+    name = user.get('name', '')
+    greeting_name = f", {name}" if name else ""
+    
+    caption = (
+        f"🌙 Привет{greeting_name}. Я — Ведана, твой астролог.\n\n"
+        f"✨ У тебя уже есть 3 бесплатных прогноза на сегодня.\n"
+        f"Выбери, что хочешь узнать:\n"
+        f"• Гороскоп на сегодня\n"
+        f"• Совместимость с партнёром\n"
+        f"• Расклад Таро\n\n"
+        f"🔮 А если захочешь заглянуть глубже – есть тайные предсказания (индивидуальная консультация).\n\n"
+        f"👇 Начни с кнопки ниже."
+    )
+    
     try:
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
@@ -781,7 +808,22 @@ async def main_menu_cb(cb: types.CallbackQuery):
     user = get_user(cb.from_user.id)
     if user:
         is_admin = (cb.from_user.username == ADMIN_USERNAME)
-        caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+        
+        # === НОВОЕ ПРИВЕТСТВИЕ ДЛЯ КНОПКИ "НАЗАД" ===
+        name = user.get('name', '')
+        greeting_name = f", {name}" if name else ""
+        
+        caption = (
+            f"🌙 Привет{greeting_name}. Я — Ведана, твой астролог.\n\n"
+            f"✨ У тебя уже есть 3 бесплатных прогноза на сегодня.\n"
+            f"Выбери, что хочешь узнать:\n"
+            f"• Гороскоп на сегодня\n"
+            f"• Совместимость с партнёром\n"
+            f"• Расклад Таро\n\n"
+            f"🔮 А если захочешь заглянуть глубже – есть тайные предсказания (индивидуальная консультация).\n\n"
+            f"👇 Начни с кнопки ниже."
+        )
+        
         try:
             await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
         except:
