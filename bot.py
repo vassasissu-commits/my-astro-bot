@@ -433,7 +433,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     user = get_user(tid)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
-    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
+    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны.                ...."
 
     try:
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
