@@ -30,7 +30,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
 
-# Создаем пул потоков для логирования (чтобы не блокировать бота)
+# Пул потоков для быстрого логирования (не блокирует бота)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
 # ================= FSM =================
@@ -52,7 +52,6 @@ class CompatState(StatesGroup):
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
-    # Оптимизация SQLite для скорости
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
@@ -82,7 +81,6 @@ def init_db():
     conn.close()
 
 def log_action_sync(tid, action, details=""):
-    """Синхронная функция логирования для выполнения в отдельном потоке"""
     try:
         conn = get_db_connection()
         conn.execute("INSERT INTO user_logs (telegram_id, action, details) VALUES (?, ?, ?)",
@@ -105,7 +103,6 @@ def get_user(tid):
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
-        # Ежедневный сброс бесплатных кредитов (если не премиум)
         if user['last_reset_date'] != today and not user['is_premium']:
             conn = get_db_connection()
             conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
@@ -361,15 +358,11 @@ def get_shop_kb():
     ])
 
 def get_menu_grid(user, is_admin=False):
-    """
-    Меню с оптимизированными названиями кнопок.
-    """
     free_txt = "∞/∞" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
     vedana_text = f"🔮 Личный прогноз ({vedana_c} вед)"
 
-    # Кнопки меню
     menu_kb = [
         [InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus_menu")],
         [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope"),
