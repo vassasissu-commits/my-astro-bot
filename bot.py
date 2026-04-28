@@ -4,6 +4,7 @@ import os
 import sqlite3
 import random
 import aiohttp
+import concurrent.futures
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -29,6 +30,9 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 DB_NAME = "astro_users.db"
 
+# Создаем пул потоков для логирования (чтобы не блокировать бота)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
 # ================= FSM =================
 class OnboardingState(StatesGroup):
     waiting_for_name = State()
@@ -44,10 +48,13 @@ class BallState(StatesGroup):
 class CompatState(StatesGroup):
     waiting_for_partner_sign = State()
 
-# ================= БАЗА ДАННЫХ (ОПТИМИЗИРОВАНО) =================
+# ================= БАЗА ДАННЫХ =================
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
+    # Оптимизация SQLite для скорости
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 def init_db():
@@ -74,24 +81,31 @@ def init_db():
     conn.commit()
     conn.close()
 
-def log_action_async(tid, action, details=""):
-    """Асинхронное логирование, чтобы не блокировать бота"""
+def log_action_sync(tid, action, details=""):
+    """Синхронная функция логирования для выполнения в отдельном потоке"""
     try:
         conn = get_db_connection()
-        conn.execute("INSERT INTO user_logs (telegram_id, action, details) VALUES (?, ?, ?)", 
+        conn.execute("INSERT INTO user_logs (telegram_id, action, details) VALUES (?, ?, ?)",
                      (tid, action, details))
         conn.commit()
         conn.close()
     except Exception as e:
         logging.error(f"Ошибка логирования: {e}")
 
+def log_action_async(tid, action, details=""):
+    """Запускает логирование в фоне, не блокируя бота"""
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(executor, log_action_sync, tid, action, details)
+
 def get_user(tid):
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     conn.close()
+    
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
+        # Ежедневный сброс бесплатных кредитов (если не премиум)
         if user['last_reset_date'] != today and not user['is_premium']:
             conn = get_db_connection()
             conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
@@ -106,6 +120,7 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     conn = get_db_connection()
     today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
+    
     if not user:
         conn.execute("""INSERT INTO users 
             (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, last_bonus_date, is_premium)
@@ -146,13 +161,12 @@ def add_referrer_bonus(ref_user_id):
     conn.execute("UPDATE users SET free_credits = free_credits + 5, vedana_credits = vedana_credits + 1 WHERE telegram_id = ?", (ref_user_id,))
     conn.commit()
     conn.close()
-    logging.info(f"Реферер {ref_user_id} получил +5 кредитов и +1 веду")
+    logging.info(f"Реферер {ref_user_id} получил бонус")
 
 def claim_daily_bonus(tid):
     conn = get_db_connection()
     today = datetime.now().strftime("%Y-%m-%d")
     user = conn.execute("SELECT last_bonus_date FROM users WHERE telegram_id=?", (tid,)).fetchone()
-    
     if user:
         last_date = user[0]
         if last_date != today:
@@ -324,13 +338,12 @@ RUNES = [
     {"name": "ᛟ Одал", "desc": "Наследие, дом, корни"}
 ]
 
-# ================= КЛАВИАТУРЫ (ШИРОКОЕ МЕНЮ) =================
-
+# ================= КЛАВИАТУРЫ (СОКРАЩЕННЫЕ ДЛЯ КНОПОК) =================
 def get_bonus_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Получить ежедневные 3 прогноза", callback_data="bonus_daily")],
-        [InlineKeyboardButton(text="👥 Пригласить друга (+5 прог + 1 веда)", callback_data="bonus_invite")],
-        [InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data="main_menu")]
+        [InlineKeyboardButton(text="🔄 Ежедневные 3 прогноза", callback_data="bonus_daily")],
+        [InlineKeyboardButton(text="👥 Пригласить друга (+5/+1)", callback_data="bonus_invite")],
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="main_menu")]
     ])
 
 def get_after_pred_kb():
@@ -341,37 +354,34 @@ def get_after_pred_kb():
 
 def get_shop_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💫 5 прогнозов + 1 Веда — 50 ⭐", callback_data="buy_starter")],
-        [InlineKeyboardButton(text="🔥 15 прогнозов + 3 Веды — 120 ⭐", callback_data="buy_optimal")],
+        [InlineKeyboardButton(text="💫 5 прог + 1 Веда — 50 ⭐", callback_data="buy_starter")],
+        [InlineKeyboardButton(text="🔥 15 прог + 3 Веды — 120 ⭐", callback_data="buy_optimal")],
         [InlineKeyboardButton(text="💎 Безлимит + 6 Вед — 200 ⭐", callback_data="buy_premium_pack")],
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
 def get_menu_grid(user, is_admin=False):
     """
-    Меню с МАКСИМАЛЬНО ШИРОКИМИ кнопками.
-    Верхняя кнопка занимает 100% ширины.
+    Меню с оптимизированными названиями кнопок.
     """
-    name = user.get('name') if user.get('name') else "гость"
-    free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
+    free_txt = "∞/∞" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
     vedana_cb = "vedana_pred" if (vedana_c > 0 or user['is_premium']) else "shop"
-    
-    vedana_text = f"🔮 Личный прогноз от Веданы ({vedana_c} вед)"
+    vedana_text = f"🔮 Личный прогноз ({vedana_c} вед)"
 
     # Самая широкая кнопка (одна в ряду)
-    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ И ПОЛУЧИТЬ БОНУС", callback_data="bonus_menu")]
+    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ", callback_data="bonus_menu")]
 
     menu_kb = [
         bonus_btn,
-        [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта рождения", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Расклад Таро на отношения", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость знаков зодиака", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар желаний", callback_data="ball"),
-         InlineKeyboardButton(text="ᚠ Гадание на древних рунах", callback_data="rune")],
-        [InlineKeyboardButton(text="🔢 Нумерология даты рождения", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 Астропрогноз на неделю", callback_data="week")],
+        [InlineKeyboardButton(text="🌟 Гороскоп сегодня", callback_data="horoscope"),
+         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
+        [InlineKeyboardButton(text="🃏 Таро на отношения", callback_data="tarot"),
+         InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
+        [InlineKeyboardButton(text="🔮 Шар желаний", callback_data="ball"),
+         InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
+        [InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology"),
+         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")]
@@ -430,9 +440,8 @@ async def send_pred(msg, text):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     tid = message.from_user.id
-    
     log_action_async(tid, "start_bot", f"Username: @{message.from_user.username}")
-    
+
     args = message.text.split()
     start_param = None
     if len(args) > 1:
@@ -498,6 +507,7 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Неверно. Формат: ДД.ММ.ГГГГ")
         return
+    
     data = await state.get_data()
     name = data.get('name')
     birth = message.text.strip()
@@ -510,6 +520,7 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
     user = get_user(message.from_user.id)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
     caption = f"♐ Знак: {zodiac}\nТеперь вы можете заказать прогноз, {name}."
+    
     try:
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
@@ -546,7 +557,7 @@ async def claim_daily(cb: types.CallbackQuery):
     await bot.answer_callback_query(cb.id)
     user = get_user(cb.from_user.id)
     is_admin = (cb.from_user.username == ADMIN_USERNAME)
-    await cb.message.answer("🌌 Меню:", reply_markup=get_menu_grid(user, is_admin))
+    await cb.message.answer("🌌 Меню: ", reply_markup=get_menu_grid(user, is_admin))
 
 @dp.callback_query(F.data == "bonus_invite")
 async def show_invite_link(cb: types.CallbackQuery):
@@ -570,7 +581,7 @@ async def horoscope(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_horoscope", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         use_free_credit(user['telegram_id'])
@@ -587,7 +598,7 @@ async def natal(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_natal", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await c.message.answer("🌌 Введи время рождения (ЧЧ:ММ):")
@@ -601,7 +612,7 @@ async def ball_menu(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_ball", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await c.message.answer("🔮 Напиши вопрос шару:")
@@ -614,7 +625,7 @@ async def compat_menu(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_compat", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await c.message.answer("💕 Введи знак партнёра (Телец, Лев...):")
@@ -627,7 +638,7 @@ async def week_forecast(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_week", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await send_loading_video(c.message)
@@ -644,7 +655,7 @@ async def numerology(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_numerology", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await send_loading_video(c.message)
@@ -661,7 +672,7 @@ async def rune_divination(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_rune", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         await send_loading_video(c.message)
@@ -679,7 +690,7 @@ async def tarot(cb: types.CallbackQuery, state: FSMContext):
     log_action_async(cb.from_user.id, "click_tarot", "")
     async def _exec(c, s):
         user = get_user(c.from_user.id)
-        if not check_free(user, c.message): 
+        if not check_free(user, c.message):
             await bot.answer_callback_query(c.id)
             return
         use_free_credit(user['telegram_id'])
@@ -762,7 +773,7 @@ async def compat_partner(msg: types.Message, state: FSMContext):
 
 # ================= ОБРАБОТЧИКИ ДЛЯ КНОПОК БЕЗ ОНБОРДИНГА =================
 @dp.callback_query(F.data == "noop")
-async def noop(cb: types.CallbackQuery): 
+async def noop(cb: types.CallbackQuery):
     await bot.answer_callback_query(cb.id)
 
 @dp.callback_query(F.data == "main_menu")
@@ -771,8 +782,6 @@ async def main_menu_cb(cb: types.CallbackQuery):
     if user:
         is_admin = (cb.from_user.username == ADMIN_USERNAME)
         caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
-        # ОПТИМИЗАЦИЯ: Не отправляем фото повторно, если можно отредактировать или отправить текст
-        # Но для надежности оставим answer_photo, так как edit_media сложнее
         try:
             await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
         except:
@@ -810,13 +819,12 @@ async def show_stats(cb: types.CallbackQuery):
     if cb.from_user.username != ADMIN_USERNAME:
         await bot.answer_callback_query(cb.id, text="🔒 Доступ запрещён", show_alert=True)
         return
-        
     conn = get_db_connection()
     count_names = conn.execute("SELECT COUNT(*) FROM user_logs WHERE action='name_entered'").fetchone()[0]
     count_reg = conn.execute("SELECT COUNT(*) FROM user_logs WHERE action='registration_complete'").fetchone()[0]
     recent_logs = conn.execute("SELECT telegram_id, action, timestamp FROM user_logs ORDER BY id DESC LIMIT 5").fetchall()
     conn.close()
-    
+
     text = f"📊 Статистика активности:\nИмен введено: {count_names}\nРегистраций завершено: {count_reg}\n\nПоследние действия:\n"
     for log in recent_logs:
         text += f"User {log[0]}: {log[1]} ({log[2]})\n"
@@ -848,15 +856,19 @@ async def admin_actions(cb: types.CallbackQuery):
     if cb.from_user.username != ADMIN_USERNAME:
         await bot.answer_callback_query(cb.id, text="🔒 Доступ запрещён", show_alert=True)
         return
+    
     action = cb.data.split("_")[1]
+    
     if action == "add":
         sub = cb.data.split("_")[2]
         if sub == "free":
             add_credits(cb.from_user.id, free_amt=5)
             msg = "✅ Добавлено 5 прогнозов"
-        else:
+        elif sub == "vedana":
             add_credits(cb.from_user.id, vedana_amt=1)
             msg = "✅ Добавлена 1 веда"
+        else:
+            msg = "❓ Неизвестное действие"
     elif action == "reset":
         conn = get_db_connection()
         conn.execute("UPDATE users SET vedana_credits=0, free_credits=3 WHERE telegram_id=?", (cb.from_user.id,))
@@ -865,14 +877,17 @@ async def admin_actions(cb: types.CallbackQuery):
         msg = "✅ Баланс сброшен"
     else:
         msg = "❓"
+        
     user = get_user(cb.from_user.id)
     text = f"{msg}\n\n👤 Текущий баланс:\n• Прогнозы: {user['free_credits']}/3\n• Веды: {user['vedana_credits']}"
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ +5 прогнозов", callback_data="admin_add_free")],
         [InlineKeyboardButton(text="➕ +1 вед", callback_data="admin_add_vedana")],
         [InlineKeyboardButton(text="🔄 Сброс", callback_data="admin_reset")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
     ])
+    
     await cb.message.answer(text, reply_markup=kb)
     await bot.answer_callback_query(cb.id)
 
@@ -926,14 +941,17 @@ async def main():
     init_db()
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+    
     app = web.Application()
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
     app.add_routes([web.get("/", lambda _: web.Response(text="OK")), web.get("/health", lambda _: web.Response(text="OK"))])
     setup_application(app, dp, bot=bot)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info(f"🚀 Бот запущен на порту {PORT}")
+    
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
