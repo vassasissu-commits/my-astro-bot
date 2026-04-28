@@ -4,7 +4,7 @@ import os
 import sqlite3
 import random
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
@@ -57,6 +57,7 @@ def init_db():
         free_credits INTEGER DEFAULT 3,
         vedana_credits INTEGER DEFAULT 0,
         last_reset_date TEXT,
+        last_bonus_date TEXT, -- Дата последнего получения ежедневного бонуса
         is_premium INTEGER DEFAULT 0
     )''')
     
@@ -92,6 +93,8 @@ def get_user(tid):
     if user:
         user = dict(user)
         today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Ежедневный сброс бесплатных кредитов (если не премиум)
         if user['last_reset_date'] != today and not user['is_premium']:
             conn = sqlite3.connect(DB_NAME)
             conn.execute("UPDATE users SET free_credits=3, last_reset_date=? WHERE telegram_id=?", (today, tid))
@@ -99,6 +102,7 @@ def get_user(tid):
             conn.close()
             user['free_credits'] = 3
             user['last_reset_date'] = today
+            
         return user
     return None
 
@@ -108,8 +112,8 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
     user = conn.execute("SELECT * FROM users WHERE telegram_id=?", (tid,)).fetchone()
     if not user:
         conn.execute("""INSERT INTO users 
-            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, is_premium)
-            VALUES (?, ?, ?, ?, 3, 0, ?, 0)""",
+            (telegram_id, name, birth_date, zodiac, free_credits, vedana_credits, last_reset_date, last_bonus_date, is_premium)
+            VALUES (?, ?, ?, ?, 3, 0, ?, NULL, 0)""",
             (tid, name, birth_date, zodiac, today))
     else:
         conn.execute("""UPDATE users SET 
@@ -121,13 +125,13 @@ def add_or_update_user(tid, name=None, birth_date=None, zodiac=None):
 
 def use_free_credit(tid):
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits - 1 WHERE telegram_id=?", (tid,))
+    conn.execute("UPDATE users SET free_credits = MAX(0, free_credits - 1) WHERE telegram_id=?", (tid,))
     conn.commit()
     conn.close()
 
 def use_vedana_credit(tid):
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET vedana_credits = vedana_credits - 1 WHERE telegram_id=?", (tid,))
+    conn.execute("UPDATE users SET vedana_credits = MAX(0, vedana_credits - 1) WHERE telegram_id=?", (tid,))
     conn.commit()
     conn.close()
 
@@ -143,10 +147,26 @@ def add_credits(tid, free_amt=0, vedana_amt=0, set_prem=False):
 
 def add_referrer_bonus(ref_user_id):
     conn = sqlite3.connect(DB_NAME)
-    conn.execute("UPDATE users SET free_credits = free_credits + 5 WHERE telegram_id = ?", (ref_user_id,))
+    conn.execute("UPDATE users SET free_credits = free_credits + 5, vedana_credits = vedana_credits + 1 WHERE telegram_id = ?", (ref_user_id,))
     conn.commit()
     conn.close()
-    logging.info(f"Реферер {ref_user_id} получил +5 кредитов")
+    logging.info(f"Реферер {ref_user_id} получил +5 кредитов и +1 веду")
+
+def claim_daily_bonus(tid):
+    """Выдает 3 бесплатных прогноза, если сегодня еще не брал"""
+    conn = sqlite3.connect(DB_NAME)
+    today = datetime.now().strftime("%Y-%m-%d")
+    user = conn.execute("SELECT last_bonus_date FROM users WHERE telegram_id=?", (tid,)).fetchone()
+    
+    if user:
+        last_date = user[0]
+        if last_date != today:
+            conn.execute("UPDATE users SET free_credits = free_credits + 3, last_bonus_date = ? WHERE telegram_id=?", (today, tid))
+            conn.commit()
+            conn.close()
+            return True # Бонус выдан
+    conn.close()
+    return False # Бонус уже был сегодня
 
 # ================= GROQ AI =================
 async def ask_groq(prompt, system_prompt):
@@ -310,6 +330,15 @@ RUNES = [
 ]
 
 # ================= КЛАВИАТУРЫ =================
+
+def get_bonus_menu_kb():
+    """Меню выбора бонуса"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Получить ежедневные 3 прогноза", callback_data="bonus_daily")],
+        [InlineKeyboardButton(text="👥 Пригласить друга (+5 прог + 1 веда)", callback_data="bonus_invite")],
+        [InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data="main_menu")]
+    ])
+
 def get_after_pred_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔮 Узнать, что скрыто", callback_data="shop")],
@@ -321,11 +350,11 @@ def get_shop_kb():
         [InlineKeyboardButton(text="💫 5 прогнозов + 1 Веда — 50 ⭐", callback_data="buy_starter")],
         [InlineKeyboardButton(text="🔥 15 прогнозов + 3 Веды — 120 ⭐", callback_data="buy_optimal")],
         [InlineKeyboardButton(text="💎 Безлимит + 6 Вед — 200 ⭐", callback_data="buy_premium_pack")],
-        [InlineKeyboardButton(text="👥 Пригласить друга (+5 прогнозов)", callback_data="invite")],
         [InlineKeyboardButton(text="🏠 Назад в меню", callback_data="main_menu")]
     ])
 
 def get_menu_grid(user, is_admin=False):
+    """Основное меню с широкой кнопкой бонуса сверху"""
     name = user.get('name') if user.get('name') else "гость"
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
@@ -334,7 +363,11 @@ def get_menu_grid(user, is_admin=False):
     # Длинные названия для расширения кнопок
     vedana_text = f"🔮 Личный прогноз от Веданы\n({vedana_c} вед)"
 
+    # Верхняя широкая кнопка бонуса
+    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ", callback_data="bonus_menu")]
+
     menu_kb = [
+        bonus_btn, # <-- Кнопка бонуса самая первая и широкая
         [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
          InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
         [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
@@ -345,8 +378,7 @@ def get_menu_grid(user, is_admin=False):
          InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")],
-        [InlineKeyboardButton(text="👥 Пригласить друга (+5)", callback_data="invite")]
+        [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")]
     ]
 
     if is_admin:
@@ -359,7 +391,8 @@ def get_menu_grid(user, is_admin=False):
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
 
 async def send_commands_hint(message: types.Message):
-    await message.answer("/start Запустить (если бот не отвечает)\n/menu Главное меню")
+    # Убрали подсказку про /start и /menu, так как теперь всё в меню
+    pass 
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
@@ -389,7 +422,7 @@ def calculate_zodiac(birth_date):
 
 def check_free(user, msg):
     if not user['is_premium'] and user['free_credits'] <= 0:
-        asyncio.create_task(msg.answer("❌ Прогнозы на сегодня закончились. Раскрой тайны в магазине!"))
+        asyncio.create_task(msg.answer("❌ Прогнозы на сегодня закончились.\nНажмите '🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ' в меню!"))
         return False
     return True
 
@@ -422,7 +455,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 ref_user = get_user(ref_id)
                 if ref_user:
                     add_referrer_bonus(ref_id)
-                    await message.answer("🎁 Ваш друг получил бонус! А вы получили +5 бесплатных прогнозов!")
+                    await message.answer("🎁 Ваш друг получил бонус! А вы получили +5 бесплатных прогнозов и +1 Веду!")
+                    log_action(tid, "referrer_bonus_received", "")
         except:
             pass
     elif start_param:
@@ -433,13 +467,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     user = get_user(tid)
     is_admin = (message.from_user.username == ADMIN_USERNAME)
-    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны.                ...."
+    caption = "🌌 Я — Ведана.\nЗвёзды готовы открыть свои тайны."
 
     try:
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-    await send_commands_hint(message)
 
 @dp.message(Command("menu"))
 @dp.message(F.text == "/menu")
@@ -455,7 +488,6 @@ async def cmd_menu(message: types.Message, state: FSMContext):
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-    await send_commands_hint(message)
 
 async def start_onboarding(callback: types.CallbackQuery, state: FSMContext, target_action: str):
     await state.update_data(target_action=target_action)
@@ -499,7 +531,6 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         await message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-    await send_commands_hint(message)
 
     if target_action:
         fake_cb = types.CallbackQuery(id="fake", from_user=message.from_user, message=message, chat_instance="fake", data=target_action)
@@ -521,6 +552,41 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
             await tarot(fake_cb, state)
         elif target_action == "vedana_pred":
             await vedana_pred(fake_cb, state)
+
+# ================= БОНУСЫ =================
+@dp.callback_query(F.data == "bonus_menu")
+async def open_bonus_menu(cb: types.CallbackQuery):
+    log_action(cb.from_user.id, "open_bonus_menu", "")
+    await cb.message.edit_text("🎁 Выберите способ получить бесплатные прогнозы:", reply_markup=get_bonus_menu_kb())
+    await bot.answer_callback_query(cb.id)
+
+@dp.callback_query(F.data == "bonus_daily")
+async def claim_daily(cb: types.CallbackQuery):
+    success = claim_daily_bonus(cb.from_user.id)
+    if success:
+        log_action(cb.from_user.id, "claim_daily_bonus", "+3 credits")
+        await cb.message.answer("✅ Вам начислено 3 бесплатных прогноза!\nОни обновляются каждый день.")
+    else:
+        log_action(cb.from_user.id, "claim_daily_bonus_failed", "already claimed")
+        await cb.message.answer("⚠️ Вы уже получали ежедневный бонус сегодня.\nПриходите завтра!")
+    await bot.answer_callback_query(cb.id)
+    # Возвращаем в главное меню после действия
+    user = get_user(cb.from_user.id)
+    is_admin = (cb.from_user.username == ADMIN_USERNAME)
+    await cb.message.answer("🌌 Меню:", reply_markup=get_menu_grid(user, is_admin))
+
+@dp.callback_query(F.data == "bonus_invite")
+async def show_invite_link(cb: types.CallbackQuery):
+    log_action(cb.from_user.id, "show_invite_link", "")
+    bot_username = (await bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start=ref_{cb.from_user.id}"
+    text = (
+        f"👥 Ваша реферальная ссылка:\n{link}\n\n"
+        f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
+        f"вы получите +5 бесплатных прогнозов и +1 Веду!"
+    )
+    await cb.message.answer(text)
+    await bot.answer_callback_query(cb.id)
 
 # ================= ОБРАБОТЧИКИ ПРЕДСКАЗАНИЙ =================
 async def check_and_run(callback: types.CallbackQuery, state: FSMContext, action_name: str, coro):
@@ -546,7 +612,6 @@ async def horoscope(cb: types.CallbackQuery, state: FSMContext):
         prompt = PROMPT_HOROSCOPE.format(sign=user['zodiac'], name=user['name'], date=datetime.now().strftime("%d.%m.%Y"))
         ans = await ask_groq(prompt, "Ты астролог с 20-летним опытом.")
         await send_pred(c.message, ans + get_shadow("horoscope"))
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "horoscope", _exec)
 
@@ -604,7 +669,6 @@ async def week_forecast(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты профессиональный астролог.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, ans + get_shadow("week"))
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "week", _exec)
 
@@ -622,7 +686,6 @@ async def numerology(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты нумеролог.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, f"🔢 Нумерология\n\n{ans}" + get_shadow("numerology"))
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "numerology", _exec)
 
@@ -641,7 +704,6 @@ async def rune_divination(cb: types.CallbackQuery, state: FSMContext):
         ans = await ask_groq(prompt, "Ты эксперт по рунам.")
         use_free_credit(user['telegram_id'])
         await send_pred(c.message, f"ᚠ Руны говорят:\n\n{rune['desc']}\n\n{ans}" + get_shadow("rune"))
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "rune", _exec)
 
@@ -659,7 +721,6 @@ async def tarot(cb: types.CallbackQuery, state: FSMContext):
         card = random.choice(TAROT_CARDS)
         text = f"🔮 Карты говорят...\n\n{card['desc']}\n\n{get_shadow('tarot')}"
         await send_pred(c.message, text)
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "tarot", _exec)
 
@@ -679,7 +740,6 @@ async def vedana_pred(cb: types.CallbackQuery, state: FSMContext):
         if not user['is_premium']:
             use_vedana_credit(user['telegram_id'])
         await send_pred(c.message, ans)
-        await send_commands_hint(c.message)
         await bot.answer_callback_query(c.id)
     await check_and_run(cb, state, "vedana_pred", _exec)
 
@@ -703,7 +763,6 @@ async def natal_place(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt, "Ты астролог-наталог.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("natal"))
-    await send_commands_hint(msg)
     await state.clear()
 
 @dp.message(BallState.waiting_for_question)
@@ -718,7 +777,6 @@ async def ball_question(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt,"Ты магический шар.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("ball"))
-    await send_commands_hint(msg)
     await state.clear()
 
 @dp.message(CompatState.waiting_for_partner_sign)
@@ -733,7 +791,6 @@ async def compat_partner(msg: types.Message, state: FSMContext):
     ans = await ask_groq(prompt, "Ты эксперт по совместимости.")
     use_free_credit(msg.from_user.id)
     await send_pred(msg, ans + get_shadow("compat"))
-    await send_commands_hint(msg)
     await state.clear()
 
 # ================= ОБРАБОТЧИКИ ДЛЯ КНОПОК БЕЗ ОНБОРДИНГА =================
@@ -751,7 +808,6 @@ async def main_menu_cb(cb: types.CallbackQuery):
             await cb.message.answer_photo(photo=FSInputFile("vedana.jpg"), caption=caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
         except:
             await cb.message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
-        await send_commands_hint(cb.message)
     await bot.answer_callback_query(cb.id)
 
 @dp.callback_query(F.data == "shop")
@@ -775,22 +831,9 @@ async def save_edit(msg: types.Message, st: FSMContext):
         zodiac = calculate_zodiac(msg.text.strip())
         add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
         await msg.answer("✅ Дата обновлена!", reply_markup=get_menu_grid(get_user(msg.from_user.id)))
-        await send_commands_hint(msg)
     except:
         await msg.answer("❌ Неверно")
     await st.clear()
-
-@dp.callback_query(F.data == "invite")
-async def invite_friend(cb: types.CallbackQuery):
-    bot_username = (await bot.get_me()).username
-    link = f"https://t.me/{bot_username}?start=ref_{cb.from_user.id}"
-    await cb.message.answer(
-        f"👥 Твоя реферальная ссылка:\n{link}\n\n"
-        f"🎁 За каждого друга, который перейдёт по ссылке и начнёт пользоваться ботом, "
-        f"ты получишь +5 бесплатных прогнозов.\n\n"
-        f"📢 Поделись ссылкой в TikTok, соцсетях или с друзьями!"
-    )
-    await bot.answer_callback_query(cb.id)
 
 # ================= АДМИН ПАНЕЛЬ И СТАТИСТИКА =================
 @dp.callback_query(F.data == "admin_stats")
@@ -910,7 +953,6 @@ async def pay_success(msg: types.Message):
         add_credits(msg.from_user.id, p.get('free',0), p.get('vedana',0), p.get('prem', False))
         user = get_user(msg.from_user.id)
         await msg.answer("✅ Пакет активирован! Звёзды на твоей стороне.", reply_markup=get_menu_grid(user))
-        await send_commands_hint(msg)
 
 # ================= ЗАПУСК =================
 async def on_startup(bot: Bot):
