@@ -4,7 +4,7 @@ import os
 import sqlite3
 import random
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
@@ -354,7 +354,10 @@ def get_shop_kb():
     ])
 
 def get_menu_grid(user, is_admin=False):
-    """Основное меню с широкой кнопкой бонуса сверху"""
+    """
+    Меню с максимально широкой верхней кнопкой (около 60+ символов),
+    чтобы растянуть интерфейс по ширине экрана, как в тексте гороскопа.
+    """
     name = user.get('name') if user.get('name') else "гость"
     free_txt = "∞/" if user['is_premium'] else f"{user['free_credits']}/3"
     vedana_c = user['vedana_credits']
@@ -363,19 +366,21 @@ def get_menu_grid(user, is_admin=False):
     # Длинные названия для расширения кнопок
     vedana_text = f"🔮 Личный прогноз от Веданы\n({vedana_c} вед)"
 
-    # Верхняя широкая кнопка бонуса
-    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ", callback_data="bonus_menu")]
+    # Верхняя широкая кнопка (одна в ряду)
+    # Текст: "🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ И ПОЛУЧИТЬ БОНУС" 
+    # Длина: ~58 символов. Это заставит кнопку занять всю ширину.
+    bonus_btn = [InlineKeyboardButton(text="🎁 АКТИВИРОВАТЬ БЕСПЛАТНЫЕ ПРОГНОЗЫ И ПОЛУЧИТЬ БОНУС", callback_data="bonus_menu")]
 
     menu_kb = [
         bonus_btn, # <-- Кнопка бонуса самая первая и широкая
         [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope"),
-         InlineKeyboardButton(text="🌌 Натальная карта", callback_data="natal")],
-        [InlineKeyboardButton(text="🃏 Расклад Таро", callback_data="tarot"),
-         InlineKeyboardButton(text="💕 Совместимость знаков", callback_data="compat")],
-        [InlineKeyboardButton(text="🔮 Магический шар", callback_data="ball"),
-         InlineKeyboardButton(text="ᚠ Гадание на рунах", callback_data="rune")],
-        [InlineKeyboardButton(text="🔢 Нумерология даты", callback_data="numerology"),
-         InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
+         InlineKeyboardButton(text="🌌 Натальная карта рождения", callback_data="natal")],
+        [InlineKeyboardButton(text="🃏 Расклад Таро на отношения", callback_data="tarot"),
+         InlineKeyboardButton(text="💕 Совместимость знаков зодиака", callback_data="compat")],
+        [InlineKeyboardButton(text="🔮 Магический шар желаний", callback_data="ball"),
+         InlineKeyboardButton(text="ᚠ Гадание на древних рунах", callback_data="rune")],
+        [InlineKeyboardButton(text="🔢 Нумерология даты рождения", callback_data="numerology"),
+         InlineKeyboardButton(text="📅 Астропрогноз на неделю", callback_data="week")],
         [InlineKeyboardButton(text=f"📊 Ваши прогнозы: {free_txt}", callback_data="noop")],
         [InlineKeyboardButton(text=vedana_text, callback_data=vedana_cb)],
         [InlineKeyboardButton(text="✏️ Изменить дату рождения", callback_data="edit")]
@@ -389,10 +394,6 @@ def get_menu_grid(user, is_admin=False):
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=menu_kb)
-
-async def send_commands_hint(message: types.Message):
-    # Убрали подсказку про /start и /menu, так как теперь всё в меню
-    pass 
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 async def send_loading_video(message):
