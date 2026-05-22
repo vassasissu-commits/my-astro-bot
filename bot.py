@@ -387,7 +387,6 @@ def get_menu_grid(user, is_admin=False):
     vedana_label = f"🔮 Ведана ({vedana_c})" if vedana_c > 0 else "💎 Личная Ведана"
 
     menu_kb = [
-        [InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="bonus_menu")],
         [InlineKeyboardButton(text="🌟 Гороскоп на сегодня", callback_data="horoscope")],
         [InlineKeyboardButton(text="📅 Прогноз на неделю", callback_data="week")],
         [
@@ -403,8 +402,11 @@ def get_menu_grid(user, is_admin=False):
             InlineKeyboardButton(text="🔢 Нумерология", callback_data="numerology")
         ],
         [InlineKeyboardButton(text=vedana_label, callback_data=vedana_cb)],
-        [InlineKeyboardButton(text="🛍 Магазин предсказаний", callback_data="shop")],
-        [InlineKeyboardButton(text=f"📊 Прогнозов: {free_txt}", callback_data="noop")],
+        [
+            InlineKeyboardButton(text="🎁 Бонус", callback_data="bonus_menu"),
+            InlineKeyboardButton(text="🛍 Магазин", callback_data="shop")
+        ],
+        [InlineKeyboardButton(text=f"📊 Осталось: {free_txt}", callback_data="noop")],
     ]
 
     if is_admin:
@@ -494,15 +496,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
     greeting_name = f"**{name}**" if name else "**Путник**"
     
     caption = (
-        f"🌙 **Ведана** — твой астрологический проводник\n{SEP}\n\n"
-        f"✨ {greeting_name}, звёзды ждут твоего вопроса.\n\n"
-        f"🎴 **Выбери, что хочешь узнать:**\n"
-        f"  ★ Гороскоп на сегодня\n"
-        f"  ★ Совместимость с партнёром\n"
-        f"  ★ Расклад Таро\n"
-        f"  ★ Глубинная консультация\n\n{SEP}\n"
-        f"📊 Осталось прогнозов: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**\n"
-        f"👇 Начни с кнопки ниже"
+        f"🌙 **Ведана** — твой астролог ✨\n\n"
+        f"{greeting_name}, звёзды ждут.\n"
+        f"📊 Осталось: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**"
     )
 
     try:
@@ -524,15 +520,9 @@ async def cmd_menu(message: types.Message, state: FSMContext):
     greeting_name = f"**{name}**" if name else "**Путник**"
     
     caption = (
-        f"🌙 **Ведана** — твой астрологический проводник\n{SEP}\n\n"
-        f"✨ {greeting_name}, звёзды ждут твоего вопроса.\n\n"
-        f"🎴 **Выбери, что хочешь узнать:**\n"
-        f"  ★ Гороскоп на сегодня\n"
-        f"  ★ Совместимость с партнёром\n"
-        f"  ★ Расклад Таро\n"
-        f"  ★ Глубинная консультация\n\n{SEP}\n"
-        f"📊 Осталось прогнозов: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**\n"
-        f"👇 Начни с кнопки ниже"
+        f"🌙 **Ведана** — твой астролог ✨\n\n"
+        f"{greeting_name}, звёзды ждут.\n"
+        f"📊 Осталось: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**"
     )
     
     try:
@@ -862,15 +852,9 @@ async def main_menu_cb(cb: types.CallbackQuery):
         greeting_name = f"**{name}**" if name else "**Путник**"
         
         caption = (
-            f"🌙 **Ведана** — твой астрологический проводник\n{SEP}\n\n"
-            f"✨ {greeting_name}, звёзды ждут твоего вопроса.\n\n"
-            f"🎴 **Выбери, что хочешь узнать:**\n"
-            f"  ★ Гороскоп на сегодня\n"
-            f"  ★ Совместимость с партнёром\n"
-            f"  ★ Расклад Таро\n"
-            f"  ★ Глубинная консультация\n\n{SEP}\n"
-            f"📊 Осталось прогнозов: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**\n"
-            f"👇 Начни с кнопки ниже"
+            f"🌙 **Ведана** — твой астролог ✨\n\n"
+            f"{greeting_name}, звёзды ждут.\n"
+            f"📊 Осталось: **{user['free_credits'] if not user['is_premium'] else '∞'}/3**"
         )
         
         try:
