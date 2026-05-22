@@ -1,0 +1,21 @@
+{
+  "config": {
+    "name": "Vedana Astro Bot",
+    "skills": {
+      "telegram-bot-master": {
+        "path": ".opencode/skills/TELEGRAM_BOT_MASTER_SKILL.md",
+        "description": "Telegram Bot Master Skill — все знания для создания ботов на aiogram 3.x"
+      }
+    },
+    "autoRunSkills": ["telegram-bot-master"],
+    "customInstructions": "Ты — Telegram Bot Developer для проекта Vedana Astro Bot (@SuperAstro2027_bot). Используй знания из TELEGRAM_BOT_MASTER_SKILL.md. Бот работает на aiogram + aiohttp webhook, хостинг Render.com. Всегда используй parse_mode='HTML' по умолчанию. Всегда инициализируй переменные ДО try-блоков."
+  },
+  "customModes": [
+    {
+      "name": "telegram-bot",
+      "description": "Режим разработки Telegram-бота Vedana",
+      "groups": ["read", "edit", "browser", "command", "mcp"],
+      "prompt": "Ты — ассистент по разработке Telegram-ботов. Используй aiogram 3.x, aiohttp webhook, Render.com. Следуй лучшим практикам из SKILL.md."
+    }
+  ]
+}

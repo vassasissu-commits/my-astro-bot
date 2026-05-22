@@ -1,0 +1,40 @@
+# Secrets
+.env
+.env.local
+config.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+
+# Backup folders (old versions)
+09.04.2026/
+09.04. 2026 18.53/
+09.04.2026 20.24/
+10.04.2026  20-37/
+10.04.2026 18-50/
+10.04.2026 20-53/
+16.04.2026 06-29/
+21.04.2026/
+24.04.2026/
+27.04.2026/
+28.04.2026/
+28.04.2026 посл/
+Новая папка/
+
+# Other junk
+__pycache__/
+*.lnk
+pexels_temp.json
+
+# Temp
+temp_pexels.ps1
+fetch_images.ps1
