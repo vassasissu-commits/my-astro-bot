@@ -376,6 +376,7 @@ def get_shop_kb():
         [InlineKeyboardButton(text="💫 Стартовый — 50 ⭐", callback_data="buy_starter")],
         [InlineKeyboardButton(text="🔥 Оптимальный — 120 ⭐", callback_data="buy_optimal")],
         [InlineKeyboardButton(text="💎 Безлимит — 200 ⭐", callback_data="buy_premium_pack")],
+        [InlineKeyboardButton(text="⭐ Купить Stars", url="https://t.me/PremiumBot")],
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="main_menu")]
     ])
 
@@ -889,7 +890,8 @@ async def shop_cb(cb: types.CallbackQuery):
         f"  • 15 прогнозов + 3 Веданы\n\n"
         f"💎 **Безлимит** — 200 ⭐\n"
         f"  • Неограниченно прогнозов + 6 Ведан\n\n{SEP}\n"
-        f"👇 Выбери свой путь:"
+        f"👇 Выбери свой путь:\n\n"
+        f"⭐ Нет Stars? Нажми «Купить Stars» — @PremiumBot"
     )
     try:
         await cb.message.edit_text(text, reply_markup=get_shop_kb())
