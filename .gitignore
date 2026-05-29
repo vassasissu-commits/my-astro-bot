@@ -38,3 +38,15 @@ pexels_temp.json
 # Temp
 temp_pexels.ps1
 fetch_images.ps1
+
+# Random text files with secrets
+Текстовый документ.txt
+Токен Astrobot.txt
+
+# External submodule
+AI-Text-Humanizer-App-main/
+
+# Generated media
+tts_samples/
+local_images/
+pexels_temp.json
