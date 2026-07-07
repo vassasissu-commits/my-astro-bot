@@ -506,6 +506,21 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except:
         await message.answer(caption, reply_markup=get_menu_grid(user, is_admin), parse_mode="Markdown")
 
+@dp.message(Command("help"))
+@dp.message(F.text == "/help")
+async def cmd_help(message: types.Message, state: FSMContext):
+    await state.clear()
+    text = (
+        f"🔮 **Ведана — помощь**\n{SEP}\n\n"
+        f"✨ Я — твой астролог. Вот что я умею:\n\n"
+        f"🌟 `/start` — запустить или перезапустить бота\n"
+        f"📋 `/menu` — главное меню\n"
+        f"🆘 `/help` — эта справка\n\n"
+        f"🌙 Если бот не отвечает — просто нажми **Start** или отправь `/start`.\n"
+        f"💫 Звёзды всегда с тобой!"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
 @dp.message(Command("menu"))
 @dp.message(F.text == "/menu")
 async def cmd_menu(message: types.Message, state: FSMContext):
@@ -553,9 +568,22 @@ async def onboarding_birthdate(message: types.Message, state: FSMContext):
         return
     
     data = await state.get_data()
+    is_editing = data.get('editing', False)
     name = data.get('name')
     birth = message.text.strip()
     zodiac = calculate_zodiac(birth)
+    
+    if is_editing:
+        user = get_user(message.from_user.id)
+        name = user['name'] if user else name
+        add_or_update_user(message.from_user.id, birth_date=birth, zodiac=zodiac)
+        await state.clear()
+        await message.answer(f"✅ **Дата обновлена**\n{SEP}\n\n♐ Твой знак: **{zodiac}**\n✨ Звёзды приняли изменения.")
+        user = get_user(message.from_user.id)
+        is_admin = (message.from_user.username == ADMIN_USERNAME)
+        await message.answer("🌌 Меню:", reply_markup=get_menu_grid(user, is_admin))
+        return
+    
     add_or_update_user(message.from_user.id, name, birth, zodiac)
     log_action_async(message.from_user.id, "registration_complete", f"Zodiac: {zodiac}, Name: {name}")
     
@@ -884,21 +912,19 @@ async def shop_cb(cb: types.CallbackQuery):
     await bot.answer_callback_query(cb.id)
 
 @dp.callback_query(F.data == "edit")
-async def edit(cb: types.CallbackQuery):
+async def edit(cb: types.CallbackQuery, state: FSMContext):
     await cb.message.answer(f"✏️ **Изменить дату рождения**\n{SEP}\n\n📅 Введи новую дату в формате ДД.ММ.ГГГГ:")
+    await state.set_state(OnboardingState.waiting_for_birthdate)
+    await state.update_data(editing=True)
     await bot.answer_callback_query(cb.id)
 
 @dp.message(F.text)
-async def save_edit(msg: types.Message, st: FSMContext):
-    try:
-        datetime.strptime(msg.text.strip(), "%d.%m.%Y")
-        zodiac = calculate_zodiac(msg.text.strip())
-        add_or_update_user(msg.from_user.id, birth_date=msg.text.strip(), zodiac=zodiac)
-        user = get_user(msg.from_user.id)
-        await msg.answer(f"✅ **Дата обновлена**\n{SEP}\n\n♐ Твой знак: **{zodiac}**\n✨ Звёзды приняли изменения.", reply_markup=get_menu_grid(user))
-    except:
-        await msg.answer("❌ Неверно")
-    await st.clear()
+async def fallback_handler(msg: types.Message, state: FSMContext):
+    user = get_user(msg.from_user.id)
+    if user and user.get('name'):
+        await cmd_menu(msg, state)
+    else:
+        await cmd_start(msg, state)
 
 # ================= АДМИН ПАНЕЛЬ И СТАТИСТИКА =================
 @dp.callback_query(F.data == "admin_stats")
