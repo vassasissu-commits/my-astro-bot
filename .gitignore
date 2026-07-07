@@ -43,6 +43,9 @@ fetch_images.ps1
 Текстовый документ.txt
 Токен Astrobot.txt
 
+# All credentials in one file (do not push to GitHub)
+CREDENTIALS.md
+
 # External submodule
 AI-Text-Humanizer-App-main/
 
